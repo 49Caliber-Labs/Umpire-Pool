@@ -1,0 +1,26 @@
+@import "tailwindcss";
+
+/* CSS Containment utilities for layout isolation & rendering performance */
+.contain-content {
+  contain: content;
+}
+
+.contain-strict {
+  contain: strict;
+}
+
+.contain-paint {
+  contain: paint;
+}
+
+.contain-layout {
+  contain: layout;
+}
+
+.contain-modal {
+  contain: layout paint;
+}
+
+.contain-list {
+  contain: content;
+}

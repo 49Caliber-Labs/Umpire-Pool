@@ -1,0 +1,66 @@
+[
+  {
+    "id": "quote-001",
+    "quote": "If you took the points, you're in the wrong pool. Straight up only, baby!",
+    "context": "1986 Umpire Pool Rulebook",
+    "year": 1986,
+    "topic": "straight_up_rules",
+    "tags": ["rules", "roast", "straight_up"]
+  },
+  {
+    "id": "quote-002",
+    "quote": "A champion eats steak on Tuesday; the rest of you can split the leftover cold pizza. Next week's sheets hit the wire on Wednesday—don't be late!",
+    "context": "Tuesday Final Standings Tradition",
+    "year": 1986,
+    "topic": "post_game_roast",
+    "tags": ["roast", "standings", "tuesday", "champions"]
+  },
+  {
+    "id": "quote-003",
+    "quote": "Back in 1986, we'd wait until Tuesday morning for the paper to print the final box scores before tallying the official standings by hand. Monday Night Football has broken more hearts than bad blind dates—hold your horses until the final gun!",
+    "context": "1986 Umpire Pool Heritage Note",
+    "year": 1986,
+    "topic": "pool_heritage",
+    "tags": ["heritage", "mnf", "history", "1986"]
+  },
+  {
+    "id": "quote-004",
+    "quote": "My strike zone wasn't small—your swing was just late. Pick your games on time and don't ask for an extension after kickoff.",
+    "context": "Crew Chief's Golden Rule",
+    "year": 1986,
+    "topic": "rules_enforcement",
+    "tags": ["rules", "kickoff", "umpire"]
+  },
+  {
+    "id": "quote-005",
+    "quote": "Bunching up atop the leaderboard! Great competition across the crew—Winners Walk, Losers Stalk!",
+    "context": "Umpire Pool Weekly Wire",
+    "year": 1986,
+    "topic": "post_game_roast",
+    "tags": ["standings", "roast", "competition"]
+  },
+  {
+    "id": "quote-006",
+    "quote": "Clarification from behind home plate: Any objection to an official ruling costs a dollar in the Umpire Equipment Jar!",
+    "context": "Umpire Fine Jar Rulebook",
+    "year": 1986,
+    "topic": "fine_jar",
+    "tags": ["rules", "fines", "authority"]
+  },
+  {
+    "id": "quote-007",
+    "quote": "If you finish behind Elvis in the standings, you don't get to talk football at the ballpark until Thanksgiving.",
+    "context": "Vegas Favorites Pacer Rule",
+    "year": 1986,
+    "topic": "elvis_lore",
+    "tags": ["elvis", "roast", "standings"]
+  },
+  {
+    "id": "quote-008",
+    "quote": "Twenty bucks for 18 weeks of football camaraderie, weekly bragging rights, and new chest protectors and masks for the umpire locker—best deal in baseball!",
+    "context": "Umpire Equipment Fundraiser Kickoff",
+    "year": 1986,
+    "topic": "season_kickoff",
+    "tags": ["kickoff", "heritage", "deal"]
+  }
+]
