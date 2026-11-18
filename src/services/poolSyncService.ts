@@ -188,7 +188,7 @@ export async function repairRosterGlobally(): Promise<{ success: boolean; player
  * Update player roster contact details globally
  */
 export async function updatePlayerGlobally(
-  playerUpdate: { id: string; email: string; phone?: string; location?: string; isActive?: boolean }
+  playerUpdate: { id: string; email: string; phone?: string; location?: string; isActive?: boolean; role?: 'admin' | 'player'; tagline?: string }
 ): Promise<{ success: boolean; players?: Player[] }> {
   try {
     const res = await fetch('/api/players', {
@@ -258,10 +258,11 @@ export async function generateElvisPicksGlobally(): Promise<{
     const data = await res.json();
     if (data.elvisPicks && db) {
       try {
-        await setDoc(doc(db, 'picks', 'Elvis'), data.elvisPicks, { merge: true });
-        console.log('[SyncService] Elvis picks also confirmed in Firestore direct sync.');
+        const botDocId = data.elvisPicks.contenderName || 'Elvis';
+        await setDoc(doc(db, 'picks', botDocId), data.elvisPicks, { merge: true });
+        console.log(`[SyncService] ${botDocId} picks also confirmed in Firestore direct sync.`);
       } catch (fsErr) {
-        console.warn('[SyncService] Direct Firestore sync notice for Elvis:', fsErr);
+        console.warn('[SyncService] Direct Firestore sync notice for Vegas Bot:', fsErr);
       }
     }
     return data;

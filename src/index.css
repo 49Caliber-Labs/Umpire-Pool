@@ -24,3 +24,59 @@
 .contain-list {
   contain: content;
 }
+
+/* =========================================================================
+   Print Optimization: High-Contrast Black & White Isolation for Spreadsheets
+   ========================================================================= */
+@media print {
+  header,
+  nav,
+  footer,
+  #global-live-scoreboard-container,
+  .no-print,
+  button:not(.print-include) {
+    display: none !important;
+  }
+
+  html, body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  @page {
+    size: landscape;
+    margin: 0.35in;
+  }
+
+  table {
+    border-collapse: collapse !important;
+    width: 100% !important;
+  }
+
+  tr {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  th, td {
+    border: 1px solid #000000 !important;
+  }
+
+  /* Default Black & White mode for clear, ink-saving printouts */
+  .print-bw {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+
+  .print-bw * {
+    box-shadow: none !important;
+    text-shadow: none !important;
+  }
+
+  .print-bw th {
+    background: #e2e8f0 !important;
+    color: #000000 !important;
+  }
+}

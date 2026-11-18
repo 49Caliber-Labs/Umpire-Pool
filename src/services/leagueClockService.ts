@@ -78,31 +78,31 @@ export function evaluateLeaguePulse(games: Game[]): LeaguePulse {
 
   if (allGamesFinal) {
     phase = 'MNF_FINAL';
-    phaseLabel = 'Week Complete (MNF Final)';
-    phaseDescription = 'All 16 games final. Tuesday crown ready. Safe to Freeze & Advance.';
+    phaseLabel = 'Week Complete';
+    phaseDescription = `All ${totalGames} games complete. Standings finalized and certified.`;
     recommendedDispatch = 'tuesday';
   } else if (mnfLive) {
     phase = 'MNF_LIVE';
     phaseLabel = 'Monday Night Football Live';
-    phaseDescription = 'Final game underway. Tiebreaker points deciding the crown.';
-  } else if (snfFinal || (finalGames >= 15 && !mnfFinal)) {
+    phaseDescription = 'Final primetime matchup underway. Tiebreaker points deciding the crown.';
+  } else if (snfFinal || (finalGames === totalGames - 1 && !mnfFinal)) {
     phase = 'SNF_FINAL';
     phaseLabel = 'Sunday Slate Final';
-    phaseDescription = 'Sunday action wrapped. Sunday Night Recap ready.';
+    phaseDescription = `${finalGames} of ${totalGames} games final. Monday Night decider pending.`;
     recommendedDispatch = 'sunday';
   } else if (liveGames > 0) {
     phase = 'SUNDAY_LIVE';
     phaseLabel = 'NFL Action Live';
-    phaseDescription = `${liveGames} live games on the board`;
+    phaseDescription = `${liveGames} live game${liveGames > 1 ? 's' : ''} in progress • ${finalGames}/${totalGames} final`;
   } else if (tnfFinal) {
     phase = 'TNF_FINAL';
-    phaseLabel = 'TNF Final';
-    phaseDescription = 'Thursday opener final. Friday Night Wire ready.';
+    phaseLabel = 'Thursday Opener Final';
+    phaseDescription = `Thursday opener in the books • ${finalGames}/${totalGames} final`;
     recommendedDispatch = 'friday';
   } else if (tnfLive) {
     phase = 'TNF_LIVE';
     phaseLabel = 'Thursday Night Opener Live';
-    phaseDescription = 'Game 1 in progress. Remaining games unlocked.';
+    phaseDescription = 'Thursday opener in progress. Remaining games pending.';
   }
 
   return {

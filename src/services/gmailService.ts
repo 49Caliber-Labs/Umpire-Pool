@@ -6,7 +6,7 @@ import { Game, Player, PlayerPickData } from '../types';
 import { getSavedPoolConfig } from '../config/leagueConfig';
 
 const ai = new GoogleGenAI({
-  apiKey: (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) ? process.env.GEMINI_API_KEY : '',
+  apiKey: (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) ? process.env.GEMINI_API_KEY : 'unconfigured',
   httpOptions: {
     headers: {
       'User-Agent': 'aistudio-build',

@@ -1,4 +1,4 @@
-import React, { useState, useMemo, memo } from 'react';
+import React, { useState, useMemo, useEffect, memo } from 'react';
 import { 
   Trophy, 
   Crown, 
@@ -9,7 +9,9 @@ import {
   Calendar, 
   Award, 
   ChevronDown, 
-  ChevronUp
+  ChevronUp,
+  Printer,
+  Download
 } from 'lucide-react';
 import { Game, Player, PlayerPickData, StandingsRow, SeasonHistory } from '../types';
 import { LegacyPickSheetViewer } from './LegacyPickSheetViewer';
@@ -74,6 +76,89 @@ export const LegacyLeaderboardTab: React.FC<LegacyLeaderboardTabProps> = memo(({
       setSortBy(field);
       setSortDir('desc');
     }
+  };
+
+  // Live Digital Clock State with Timezone & DST
+  const [currentDateTime, setCurrentDateTime] = useState<Date>(new Date());
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentDateTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const formattedDigitalClock = useMemo(() => {
+    try {
+      const dateStr = currentDateTime.toLocaleDateString('en-US', {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric'
+      });
+      const timeStr = currentDateTime.toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+        second: '2-digit',
+        timeZoneName: 'short'
+      });
+      return `${dateStr} • ${timeStr}`;
+    } catch (e) {
+      return currentDateTime.toLocaleString();
+    }
+  }, [currentDateTime]);
+
+  // Clean Landscape Print for the Scoring Matrix
+  const handlePrintMatrix = () => {
+    const prevTitle = document.title;
+    document.title = `Week ${currentActiveWeek} Scoring Spreadsheet`;
+    document.body.classList.remove('print-portrait');
+    document.body.classList.add('print-bw');
+    window.print();
+    setTimeout(() => {
+      document.title = prevTitle;
+      document.body.classList.remove('print-bw');
+    }, 1000);
+  };
+
+  // Export full live matrix to CSV
+  const handleExportCsv = () => {
+    const headers = [
+      'Rank',
+      'Contender',
+      'Role',
+      'Week Wins',
+      'Week Losses',
+      ...games.map(g => `G${g.gameNumber} (${g.awayTeam} @ ${g.homeTeam})`),
+      'Tiebreaker',
+      'Season Wins'
+    ];
+    const rows: string[][] = [];
+
+    filteredStandings.forEach((st) => {
+      const pPicks = picks[st.name]?.picks || {};
+      const player = players.find(p => p.name === st.name);
+      const role = player?.role || 'player';
+      const seasonWins = seasonHistory?.records?.[st.name]?.totalWins ?? st.wins;
+
+      const row = [
+        String(st.rank),
+        `"${st.name}"`,
+        role,
+        String(st.wins),
+        String(st.losses),
+        ...games.map(g => `"${pPicks[g.gameNumber] || ''}"`),
+        String(st.tbPrediction ?? ''),
+        String(seasonWins)
+      ];
+      rows.push(row);
+    });
+
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `Week_${currentActiveWeek}_Scoring_Spreadsheet.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   // Decoupled Official League Clock Evaluator
@@ -1053,7 +1138,7 @@ export const LegacyLeaderboardTab: React.FC<LegacyLeaderboardTabProps> = memo(({
             <span>Season Ledger</span>
           </button>
 
-          {/* Toggle 4: Parchment & Custom Pick Sheets */}
+          {/* Toggle 4: Pick Sheets & Printables */}
           <button
             onClick={() => setViewMode('sheets')}
             className={`flex items-center justify-center gap-1.5 py-2 px-2 rounded-lg text-xs font-bold transition-all cursor-pointer border ${
@@ -1063,20 +1148,20 @@ export const LegacyLeaderboardTab: React.FC<LegacyLeaderboardTabProps> = memo(({
             }`}
           >
             <FileSpreadsheet className="w-3.5 h-3.5" />
-            <span>Parchment & Themes</span>
+            <span>Pick Sheets &amp; Printables</span>
           </button>
         </div>
       </div>
 
-      {/* Official Decoupled League Clock & Standings Vault Pulse */}
-      <div className="bg-gradient-to-r from-emerald-950 via-[#0a2f1d] to-emerald-950 text-white rounded-xl border-2 border-emerald-700/80 p-3 mb-4 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+      {/* Official Decoupled League Clock & Live Digital Master Clock */}
+      <div className="bg-gradient-to-r from-emerald-950 via-[#0a2f1d] to-emerald-950 text-white rounded-xl border-2 border-emerald-700/80 p-3 sm:p-4 mb-4 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-emerald-900 border border-emerald-600/70 flex items-center justify-center text-amber-300 font-bold shrink-0 shadow-inner">
+          <div className="w-10 h-10 rounded-lg bg-emerald-900 border border-emerald-600/70 flex items-center justify-center text-amber-300 font-bold shrink-0 shadow-inner text-xl">
             ⏱️
           </div>
           <div>
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-xs font-black uppercase tracking-wider text-amber-300">
+              <span className="text-xs sm:text-sm font-black uppercase tracking-wider text-amber-300">
                 Official League Clock • Week {currentActiveWeek}
               </span>
               <span className="bg-emerald-800 text-emerald-100 text-[10px] font-bold px-2 py-0.5 rounded-full border border-emerald-600">
@@ -1084,8 +1169,19 @@ export const LegacyLeaderboardTab: React.FC<LegacyLeaderboardTabProps> = memo(({
               </span>
             </div>
             <div className="text-xs text-emerald-200/90 font-medium mt-0.5">
-              {pulse.phaseDescription} • <span className="text-amber-200 font-bold">{pulse.finalGames}/{pulse.totalGames} Final</span>
+              {pulse.phaseDescription} • <span className="text-amber-200 font-bold">{pulse.finalGames} of {pulse.totalGames} Games Final</span>
             </div>
+          </div>
+        </div>
+
+        {/* Real-Time Digital Clock with Time Zone & Daylight Savings */}
+        <div className="bg-[#07170e] border border-emerald-700/80 rounded-lg px-3.5 py-1.5 font-mono text-right self-stretch md:self-auto shadow-inner">
+          <div className="text-[10px] uppercase tracking-wider text-emerald-400 font-bold flex items-center justify-end gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+            <span>League Clock</span>
+          </div>
+          <div className="text-xs sm:text-sm font-black text-amber-300 tracking-tight mt-0.5">
+            {formattedDigitalClock}
           </div>
         </div>
       </div>
@@ -1101,8 +1197,30 @@ export const LegacyLeaderboardTab: React.FC<LegacyLeaderboardTabProps> = memo(({
                 <span>Vintage Matrix ({filteredStandings.length} Contenders)</span>
               </span>
               <span className="hidden sm:inline text-slate-500 border-l border-slate-300 pl-3">
-                Scroll right → to view all 16 games & season totals
+                Scroll right → to view all {games.length} games &amp; season totals
               </span>
+            </div>
+
+            {/* Print & CSV Export Actions */}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handlePrintMatrix}
+                className="px-2.5 py-1 rounded-lg text-xs font-bold bg-slate-900 text-white hover:bg-slate-800 transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs no-print"
+                title="Print spreadsheet in clean landscape Black & White"
+              >
+                <Printer className="w-3.5 h-3.5 text-amber-300" />
+                <span>Print Sheet</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleExportCsv}
+                className="px-2.5 py-1 rounded-lg text-xs font-bold bg-white text-slate-800 hover:bg-slate-100 border border-slate-300 transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs no-print"
+                title="Download spreadsheet data to CSV"
+              >
+                <Download className="w-3.5 h-3.5 text-emerald-700" />
+                <span>CSV</span>
+              </button>
             </div>
 
             {/* Quick Reorder Controls */}
@@ -1514,7 +1632,12 @@ export const LegacyLeaderboardTab: React.FC<LegacyLeaderboardTabProps> = memo(({
                       }`}>
                         {row.tbPrediction !== '' && row.tbPrediction !== undefined ? (
                           <div className="leading-tight">
-                            <span className="font-extrabold text-purple-900">{row.tbPrediction}</span>
+                            <div className="flex items-center justify-center gap-0.5">
+                              {picks[row.name]?.isAutoDefaultTiebreaker && (
+                                <span title="Over/Under tiebreaker auto-assigned at kickoff (Dad's Rule)" className="text-[9px]">🤖</span>
+                              )}
+                              <span className="font-extrabold text-purple-900">{row.tbPrediction}</span>
+                            </div>
                             {row.tbError !== null && (
                               <span className="block text-[8px] text-purple-700 font-normal">
                                 ±{row.tbError}
@@ -1529,6 +1652,7 @@ export const LegacyLeaderboardTab: React.FC<LegacyLeaderboardTabProps> = memo(({
                       {/* 16 Games Picks */}
                       {games.map(game => {
                         const pick = playerPickData[game.gameNumber];
+                        const isAutoDefault = picks[row.name]?.autoDefaultGames?.includes(game.gameNumber);
                         const isFinal = game.status === 'final';
                         const isLive = game.status === 'in_progress';
                         const winner = game.officialWinner;
@@ -1586,8 +1710,13 @@ export const LegacyLeaderboardTab: React.FC<LegacyLeaderboardTabProps> = memo(({
                             {pick ? (
                               <div 
                                 className="flex items-center justify-center gap-0.5 truncate" 
-                                title={`Pick: ${pick}${isTie ? ' (Official Game Tie - Push)' : isLive ? ` (Live: ${game.awayTeam} ${game.awayScore ?? 0} - ${game.homeTeam} ${game.homeScore ?? 0})` : ''}`}
+                                title={`Pick: ${pick}${isAutoDefault ? ' (Auto-defaulted Vegas Favorite at kickoff)' : ''}${isTie ? ' (Official Game Tie - Push)' : isLive ? ` (Live: ${game.awayTeam} ${game.awayScore ?? 0} - ${game.homeTeam} ${game.homeScore ?? 0})` : ''}`}
                               >
+                                {isAutoDefault && (
+                                  <span className="text-[9px] text-amber-700 font-bold shrink-0" title="Vegas Opening Favorite auto-assigned at kickoff (Dad's Rule)">
+                                    🤖
+                                  </span>
+                                )}
                                 {isTie && <span className="text-[9px] font-black shrink-0" title="Tie (Push)">⚖️</span>}
                                 {isCorrect && <Check className="w-2.5 h-2.5 text-emerald-700 stroke-[3] shrink-0" />}
                                 {isWrong && <X className="w-2.5 h-2.5 text-rose-500 shrink-0" />}
@@ -1627,6 +1756,10 @@ export const LegacyLeaderboardTab: React.FC<LegacyLeaderboardTabProps> = memo(({
                 <span className="inline-flex items-center gap-1.5">
                   <span className="w-3 h-3 rounded-xs bg-amber-100 border border-amber-300"></span>
                   <span className="text-amber-950 font-semibold">Gold = In-Progress</span>
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="text-xs">🤖</span>
+                  <span className="text-slate-800 font-bold">Dad&apos;s Rule (Kickoff Auto-Default)</span>
                 </span>
               </div>
               <span className="text-slate-500 italic text-[10px]">
@@ -1714,6 +1847,7 @@ export const LegacyLeaderboardTab: React.FC<LegacyLeaderboardTabProps> = memo(({
                   <div className="grid grid-cols-4 sm:grid-cols-8 gap-1.5 text-xs">
                     {games.map(game => {
                       const pick = picks[s.name]?.picks[game.gameNumber];
+                      const isAutoDefault = picks[s.name]?.autoDefaultGames?.includes(game.gameNumber);
                       const isFinal = game.status === 'final';
                       const winner = game.officialWinner;
                       const isTie = isGameTie(game);
@@ -1734,6 +1868,7 @@ export const LegacyLeaderboardTab: React.FC<LegacyLeaderboardTabProps> = memo(({
                           }`}
                         >
                           <div className="truncate font-bold text-[11px] flex items-center justify-center gap-0.5">
+                            {isAutoDefault && <span className="text-[9px] text-amber-700 font-bold shrink-0" title="Auto-assigned Vegas Favorite at kickoff (Dad's Rule)">🤖</span>}
                             {isTie && <span className="text-[10px]">⚖️</span>}
                             <span>{pick || '—'}</span>
                           </div>

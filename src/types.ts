@@ -49,6 +49,8 @@ export interface Player {
 export interface PlayerPickData {
   contenderName: string;
   picks: Record<number, string>; // gameNumber -> pickedTeam
+  autoDefaultGames?: number[]; // list of gameNumbers auto-assigned Vegas favorites at kickoff
+  isAutoDefaultTiebreaker?: boolean;
   tiebreaker: number | '';
   submittedAt?: string;
 }

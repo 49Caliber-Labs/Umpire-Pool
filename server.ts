@@ -26,7 +26,7 @@ const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 
 const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
+  apiKey: process.env.GEMINI_API_KEY || 'unconfigured',
   httpOptions: {
     headers: {
       'User-Agent': 'aistudio-build',
@@ -83,11 +83,27 @@ if (!fs.existsSync(DATA_DIR)) {
 const BANNED_PLACEHOLDER_NAMES = new Set<string>([]);
 const FAKE_DEMO_IDS = new Set<string>([]);
 
-// Calculate Vegas Insider Favorites for Elvis
-function getElvisVegasFavorites(gamesList: Game[]): PlayerPickData {
+// Resolve configured Vegas Favorites Bot name (e.g., "Charlie Brown" or "Elvis")
+function getConfiguredBotName(state?: PoolStorageState): string {
+  const cfgName = state?.poolConfig?.elvisBotName || (typeof poolState !== 'undefined' ? poolState?.poolConfig?.elvisBotName : undefined);
+  if (cfgName && cfgName.trim()) {
+    return cfgName.trim();
+  }
+  const botPlayer = (state?.players || (typeof poolState !== 'undefined' ? poolState?.players : []) || []).find(
+    p => p.id === 'elvis' || p.isElvis
+  );
+  if (botPlayer && botPlayer.name && botPlayer.name.trim()) {
+    return botPlayer.name.trim();
+  }
+  return 'Elvis';
+}
+
+// Calculate Vegas Insider Favorites for the Vegas Bot
+function getElvisVegasFavorites(gamesList: Game[], customBotName?: string): PlayerPickData {
+  const botName = (customBotName || getConfiguredBotName()).trim() || 'Elvis';
   const picks: Record<number, string> = {};
   gamesList.forEach(g => {
-    // Elvis gets official Vegas favorites - guaranteed to be one of the teams in the game
+    // Vegas Bot gets official Vegas favorites - guaranteed to be one of the teams in the game
     const away = (g.awayTeam || '').toLowerCase();
     const home = (g.homeTeam || '').toLowerCase();
     const fav = (g.favorite || '').toLowerCase();
@@ -112,7 +128,7 @@ function getElvisVegasFavorites(gamesList: Game[]): PlayerPickData {
   const mnf = gamesList.find(g => g.isMNF);
   const tiebreaker = mnf && mnf.overUnder ? Math.round(mnf.overUnder) : 48;
   return {
-    contenderName: 'Elvis',
+    contenderName: botName,
     picks,
     tiebreaker,
     submittedAt: new Date().toISOString()
@@ -168,7 +184,8 @@ function sanitizePoolState(state: PoolStorageState): PoolStorageState {
     }
   }
 
-  // 1. Normalize Elvis name across players and prune any fake demo contenders
+  // 1. Normalize Vegas Favorites Bot name across players and prune any fake demo contenders
+  const configuredBotName = getConfiguredBotName(state);
   const playerMap = new Map<string, Player>();
   (Array.isArray(state.players) ? state.players : INITIAL_PLAYERS).forEach(p => {
     const idLower = p.id.toLowerCase();
@@ -177,11 +194,14 @@ function sanitizePoolState(state: PoolStorageState): PoolStorageState {
       return;
     }
     // If pool hasn't been configured yet via Setup Wizard, do not auto-seed Elvis or anyone else
-    if (!state.poolConfig?.isConfigured && idLower === 'elvis') {
+    if (!state.poolConfig?.isConfigured && (idLower === 'elvis' || p.isElvis)) {
       return;
     }
-    const cleanName = p.id === 'elvis' ? 'Elvis' : p.name.replace(/\s*\(Vegas Favs\)\s*/i, '').trim();
-    playerMap.set(cleanName.toLowerCase(), { ...p, name: cleanName });
+    const isBot = p.id === 'elvis' || p.isElvis;
+    const cleanName = isBot
+      ? configuredBotName
+      : p.name.replace(/\s*\(Vegas Favs\)\s*/i, '').trim();
+    playerMap.set(cleanName.toLowerCase(), { ...p, name: cleanName, isElvis: isBot ? true : p.isElvis });
   });
 
   // Guarantee that once configured (or when contenders exist), the main Pool Admin is ALWAYS on the roster
@@ -225,7 +245,8 @@ function sanitizePoolState(state: PoolStorageState): PoolStorageState {
   const sanitizedPicks: Record<string, PlayerPickData> = {};
   const rawPicks = state.picks || {};
   for (const [key, val] of Object.entries(rawPicks)) {
-    const rawContenderName = key === 'Elvis Presley' ? 'Elvis' : key;
+    const isLegacyBotKey = key === 'Elvis' || key === 'Elvis Presley';
+    const rawContenderName = isLegacyBotKey ? configuredBotName : key;
     const contenderName = rawContenderName.replace(/\s*\(Vegas Favs\)\s*/i, '').trim();
     const contenderLower = contenderName.toLowerCase();
 
@@ -251,7 +272,7 @@ function sanitizePoolState(state: PoolStorageState): PoolStorageState {
                 picksObj[gNum] = game.awayTeam;
               } else if (home.includes(picked) || picked.includes(home)) {
                 picksObj[gNum] = game.homeTeam;
-              } else if (contenderName === 'Elvis') {
+              } else if (contenderName === configuredBotName || contenderName === 'Elvis') {
                 picksObj[gNum] = game.homeTeam;
               }
               continue;
@@ -501,9 +522,10 @@ async function syncFromCloud(): Promise<boolean> {
 
     if (!picksSnap.empty) {
       // Re-initialize picks strictly for current registered players
+      const botName = getConfiguredBotName(poolState);
       const freshPicks: Record<string, PlayerPickData> = {};
       (poolState.players || INITIAL_PLAYERS).forEach(p => {
-        const cleanName = p.id === 'elvis' ? 'Elvis' : p.name;
+        const cleanName = (p.id === 'elvis' || p.isElvis) ? botName : p.name;
         freshPicks[cleanName] = {
           contenderName: cleanName,
           picks: {},
@@ -514,7 +536,7 @@ async function syncFromCloud(): Promise<boolean> {
       let updatedCount = 0;
       picksSnap.forEach(d => {
         const data = d.data() as PlayerPickData;
-        const name = d.id;
+        const name = (d.id === 'Elvis' && botName !== 'Elvis') ? botName : d.id;
         if (!Object.prototype.hasOwnProperty.call(freshPicks, name)) return;
         if (data && data.picks && typeof data.picks === 'object') {
           // Validate picks against current active week's games to prevent stale cross-week pick resurrection
@@ -541,8 +563,8 @@ async function syncFromCloud(): Promise<boolean> {
               submittedAt: data.submittedAt || new Date().toISOString()
             };
             updatedCount++;
-          } else if (name === 'Elvis' && poolState.picks?.['Elvis'] && Object.keys(poolState.picks['Elvis'].picks || {}).length > 0) {
-            freshPicks['Elvis'] = poolState.picks['Elvis'];
+          } else if (name === botName && poolState.picks?.[botName] && Object.keys(poolState.picks[botName].picks || {}).length > 0) {
+            freshPicks[botName] = poolState.picks[botName];
             updatedCount++;
           }
         }
@@ -933,9 +955,11 @@ export async function stageDispatchToGmail(dispatch: WeeklyDispatch): Promise<{
   status: string;
 }> {
   const adminEmail = poolState.poolConfig?.adminEmail || poolState.players.find(p => p.role === 'admin')?.email || '';
-  const activeContenderEmails = (poolState.players || [])
-    .filter(p => p.isActive !== false && !p.isElvis && p.email && p.email.includes('@'))
-    .map(p => p.email);
+  const activeContenderEmails = Array.from(new Set(
+    (poolState.players || [])
+      .filter(p => p.isActive !== false && !p.isElvis && p.email && p.email.includes('@'))
+      .map(p => p.email.trim())
+  ));
 
   if (activeGoogleToken && adminEmail) {
     const res = await createServerGmailDraft(
@@ -999,10 +1023,11 @@ export async function executeSundayNightSequence(activeWeek: number): Promise<{
   console.log(`[Master Clock] [Stage 2/4] Calculating Sunday standings & scores, persisting locally and syncing to Firestore...`);
   const mnfGame = games.find(g => g.isMNF || (g.day && g.day.toLowerCase().includes('mon')) || g.gameNumber === 16);
   
+  const botName = getConfiguredBotName(poolState);
   const rawSundayStandings = activePlayers.map(p => {
-    const cleanName = p.id === 'elvis' ? 'Elvis' : p.name;
-    const pPicks = poolState.picks[cleanName]?.picks || {};
-    const rawTb = poolState.picks[cleanName]?.tiebreaker ?? '';
+    const cleanName = (p.id === 'elvis' || p.isElvis) ? botName : p.name;
+    const pPicks = poolState.picks[cleanName]?.picks || poolState.picks[p.name]?.picks || {};
+    const rawTb = poolState.picks[cleanName]?.tiebreaker ?? poolState.picks[p.name]?.tiebreaker ?? '';
 
     let sundayWins = 0;
     let sundayLosses = 0;
@@ -1138,6 +1163,11 @@ export async function runMasterClockTick(): Promise<void> {
     poolState.clockLedger.ticksCount += 1;
     poolState.clockLedger.lastPhase = pulse.phase;
 
+    // Do not fire autonomous pool triggers until the Pool Admin completes the Setup Wizard
+    if (!poolState.poolConfig?.isConfigured) {
+      return;
+    }
+
     // -------------------------------------------------------------
     // CALENDAR ASSESSMENT (America/Los_Angeles / PST Timezone)
     // Autonomous triggers fire on Game State OR Scheduled Time Window
@@ -1164,8 +1194,16 @@ export async function runMasterClockTick(): Promise<void> {
     // or whenever games are in_progress or scheduled, ensuring game statuses and MNF finals
     // are never stale in server memory.
     // -------------------------------------------------------------
+    const humanPlayers = (poolState.players || []).filter(p => p.isActive !== false && !p.isElvis && p.id !== 'elvis');
+    const humansWithPicks = humanPlayers.filter(p => {
+      const pData = poolState.picks[p.name];
+      return pData && pData.picks && Object.keys(pData.picks).length > 0;
+    });
+    const hasAnyHumanPicks = humansWithPicks.length > 0;
+    const allHumansPicked = humanPlayers.length > 0 && humansWithPicks.length === humanPlayers.length;
+
     const hasUnfinalGames = games.some(g => g.status === 'in_progress' || g.status === 'scheduled');
-    const isScoreDay = pstDay === 'Sun' || pstDay === 'Mon' || pstDay === 'Tue' || pstDay === 'Thu';
+    const isScoreDay = pstDay === 'Sun' || pstDay === 'Mon' || pstDay === 'Tue' || pstDay === 'Thu' || (pstDay === 'Sat' && allHumansPicked);
     if (hasUnfinalGames && isScoreDay) {
       try {
         await scrapeAndIngestLiveNflScores(activeWeek);
@@ -1189,28 +1227,105 @@ export async function runMasterClockTick(): Promise<void> {
     }
 
     // -------------------------------------------------------------
-    // TRIGGER 1: Autonomous Elvis Vegas Favorites
-    // Elvis resets to a clean sheet with everyone else on Tuesday reset.
+    // TRIGGER 1: Autonomous Vegas Favorites Bot
+    // Vegas Bot resets to a clean sheet with everyone else on Tuesday reset.
     // Vegas favorites are only populated near kickoff (Thursday 4 PM PST+ or live action)
     // -------------------------------------------------------------
+    const botName = getConfiguredBotName(poolState);
     const elvisEventKey = `elvis-vegas-picks-week-${activeWeek}`;
-    const elvisPicksRecord = poolState.picks['Elvis'];
+    const elvisPicksRecord = poolState.picks[botName] || poolState.picks['Elvis'];
     const elvisPickCount = elvisPicksRecord && elvisPicksRecord.picks ? Object.keys(elvisPicksRecord.picks).length : 0;
     const isKickoffApproaching = (pstDay === 'Thu' && pstHour >= 16) || games.some(g => g.status === 'in_progress' || g.status === 'final') || pstDay === 'Fri' || pstDay === 'Sat' || pstDay === 'Sun' || pstDay === 'Mon';
 
     if (isKickoffApproaching && (elvisPickCount < games.length || !poolState.clockLedger.completedEvents[elvisEventKey])) {
-      console.log(`[Master Clock] ⏰ Trigger: Populating Elvis Vegas favorites for Week ${activeWeek}...`);
-      const elvisFavorites = getElvisVegasFavorites(games);
-      poolState.picks['Elvis'] = elvisFavorites;
+      console.log(`[Master Clock] ⏰ Trigger: Populating ${botName} Vegas favorites for Week ${activeWeek}...`);
+      const elvisFavorites = getElvisVegasFavorites(games, botName);
+      poolState.picks[botName] = elvisFavorites;
+      if (botName !== 'Elvis') delete poolState.picks['Elvis'];
       poolState.clockLedger.completedEvents[elvisEventKey] = new Date().toISOString();
       await savePoolState(poolState, true);
-      try {
-        await setDoc(doc(db, 'picks', 'Elvis'), elvisFavorites, { merge: true });
-        console.log(`[Master Clock] ✓ Elvis picks synced directly to Cloud Firestore.`);
-      } catch (fsErr: any) {
-        console.warn('[Master Clock] Cloud Firestore direct sync warning for Elvis:', fsErr.message);
+      if (db) {
+        try {
+          await setDoc(doc(db, 'picks', botName), elvisFavorites, { merge: true });
+          console.log(`[Master Clock] ✓ ${botName} picks synced directly to Cloud Firestore.`);
+        } catch (fsErr: any) {
+          console.warn(`[Master Clock] Cloud Firestore direct sync warning for ${botName}:`, fsErr.message);
+        }
       }
-      console.log(`[Master Clock] ✓ Elvis picks populated and saved.`);
+      console.log(`[Master Clock] ✓ ${botName} picks populated and saved.`);
+    }
+
+    // -------------------------------------------------------------
+    // TRIGGER 1B: Autonomous Vegas Favorites Fallback ("Dad's Rule")
+    // When an individual game reaches kickoff whistle, contenders who did
+    // not submit a pick receive the Vegas Opening Favorite stamped with
+    // autoDefaultGames. Eliminates zero-scores and admin liability.
+    // -------------------------------------------------------------
+    const enableVegasFallback = poolState.poolConfig?.enableAutoVegasFavoritesFallback !== false;
+    if (enableVegasFallback && games.length > 0) {
+      let anyDefaultsAssigned = false;
+      const registeredPlayers = (poolState.players || []).filter(p => p.isActive !== false && !p.isElvis && p.id !== 'elvis');
+      const nowMs = Date.now();
+
+      games.forEach(game => {
+        const isLocked = isGameLockedByKickoff(game, nowMs);
+        if (!isLocked) return;
+
+        let favTeam = game.favorite;
+        if (!favTeam || (favTeam !== game.awayTeam && favTeam !== game.homeTeam)) {
+          favTeam = game.homeTeam; // Default to home team if spread is EVEN or unlisted
+        }
+
+        registeredPlayers.forEach(player => {
+          if (!poolState.picks[player.name]) {
+            poolState.picks[player.name] = {
+              contenderName: player.name,
+              picks: {},
+              tiebreaker: ''
+            };
+          }
+          const pRecord = poolState.picks[player.name];
+          if (!pRecord.picks) pRecord.picks = {};
+
+          // Check if game is missing a pick at kickoff
+          if (!pRecord.picks[game.gameNumber]) {
+            pRecord.picks[game.gameNumber] = favTeam;
+            if (!pRecord.autoDefaultGames) pRecord.autoDefaultGames = [];
+            if (!pRecord.autoDefaultGames.includes(game.gameNumber)) {
+              pRecord.autoDefaultGames.push(game.gameNumber);
+            }
+            pRecord.submittedAt = new Date().toISOString();
+            anyDefaultsAssigned = true;
+            console.log(`[Dad's Rule] Kickoff auto-default assigned: Game ${game.gameNumber} (${favTeam}) to ${player.name}`);
+          }
+
+          // If MNF game is locked and tiebreaker is missing
+          if (game.isMNF && (pRecord.tiebreaker === '' || pRecord.tiebreaker === undefined)) {
+            const fallbackTb = game.overUnder ? Math.round(game.overUnder) : 45;
+            pRecord.tiebreaker = fallbackTb;
+            pRecord.isAutoDefaultTiebreaker = true;
+            anyDefaultsAssigned = true;
+            console.log(`[Dad's Rule] MNF tiebreaker auto-default assigned: ${fallbackTb} to ${player.name}`);
+          }
+        });
+      });
+
+      if (anyDefaultsAssigned) {
+        await savePoolState(poolState, true);
+        if (db) {
+          try {
+            for (const player of registeredPlayers) {
+              const pData = poolState.picks[player.name];
+              if (pData) {
+                await setDoc(doc(db, 'picks', player.name), pData, { merge: true });
+              }
+            }
+            console.log(`[Dad's Rule] Auto-defaulted picks synced to Cloud Firestore.`);
+          } catch (e: any) {
+            console.warn(`[Dad's Rule] Firestore sync error:`, e.message);
+          }
+        }
+      }
     }
 
     // -------------------------------------------------------------
@@ -1234,9 +1349,9 @@ export async function runMasterClockTick(): Promise<void> {
     // Respect league dispatchCadence (1 = Tuesday only, 2 = Sunday + Tuesday, 3 = Friday + Sunday + Tuesday)
     const dispatchCadence = poolState.poolConfig?.dispatchCadence || 1;
 
-    // 2A: Friday Night Wire (TNF Final OR Scheduled Friday Time) - Only if cadence === 3
+    // 2A: Friday Night Wire (TNF Final OR Scheduled Friday Time) - Only if cadence === 3 and contenders have submitted picks
     const fridayKey = `auto-dispatch-friday-week-${activeWeek}`;
-    const shouldTriggerFriday = dispatchCadence === 3 && (pulse.tnfFinal || pulse.phase === 'TNF_FINAL' || isFridayCalendarTrigger) && !poolState.clockLedger.completedEvents[fridayKey];
+    const shouldTriggerFriday = dispatchCadence === 3 && hasAnyHumanPicks && (pulse.tnfFinal || pulse.phase === 'TNF_FINAL' || isFridayCalendarTrigger) && !poolState.clockLedger.completedEvents[fridayKey];
     if (shouldTriggerFriday) {
       console.log(`[Master Clock] ⏰ Trigger: Auto-generating Friday Night Wire for Week ${activeWeek}...`);
       const dispatch = await buildVibrantWeeklyDispatch(
@@ -1482,13 +1597,17 @@ app.post('/api/pool-config', async (req, res) => {
       });
     }
 
-    poolState.players = incomingPlayers;
+    const botName = getConfiguredBotName(poolState);
+    poolState.players = incomingPlayers.map((p: Player) =>
+      (p.id === 'elvis' || p.isElvis) ? { ...p, name: botName, isElvis: true } : p
+    );
     const updatedPicks: Record<string, PlayerPickData> = {};
-    incomingPlayers.forEach((p: Player) => {
-      const cleanName = p.id === 'elvis' ? 'Elvis' : p.name;
+    poolState.players.forEach((p: Player) => {
+      const cleanName = (p.id === 'elvis' || p.isElvis) ? botName : p.name;
       const canPreserveExisting = (wasAlreadyConfigured && !forceReset) || prevWeek === targetWeek;
-      updatedPicks[cleanName] = (canPreserveExisting && poolState.picks[cleanName] && Object.keys(poolState.picks[cleanName].picks || {}).length > 0)
-        ? poolState.picks[cleanName]
+      const existingData = poolState.picks[cleanName] || ((p.id === 'elvis' || p.isElvis) ? poolState.picks['Elvis'] : undefined);
+      updatedPicks[cleanName] = (canPreserveExisting && existingData && Object.keys(existingData.picks || {}).length > 0)
+        ? { ...existingData, contenderName: cleanName }
         : {
             contenderName: cleanName,
             picks: {},
@@ -1496,10 +1615,10 @@ app.post('/api/pool-config', async (req, res) => {
           };
     });
 
-    // Auto-populate Elvis Vegas Favorites for the active starting week if enabled
-    const hasElvis = incomingPlayers.some((p: Player) => p.id === 'elvis' || p.isElvis || p.name === 'Elvis');
+    // Auto-populate Vegas Bot Favorites for the active starting week if enabled
+    const hasElvis = poolState.players.some((p: Player) => p.id === 'elvis' || p.isElvis || p.name === botName);
     if (hasElvis && poolState.games && poolState.games.length > 0) {
-      updatedPicks['Elvis'] = getElvisVegasFavorites(poolState.games);
+      updatedPicks[botName] = getElvisVegasFavorites(poolState.games, botName);
     }
 
     poolState.picks = updatedPicks;
@@ -1527,8 +1646,8 @@ app.post('/api/pool-config', async (req, res) => {
 
     // Ensure every active contender on the roster has a seasonHistory record initialized
     if (poolState.seasonHistory && poolState.seasonHistory.records) {
-      incomingPlayers.forEach((p: Player) => {
-        const cleanName = p.id === 'elvis' ? 'Elvis' : p.name;
+      poolState.players.forEach((p: Player) => {
+        const cleanName = (p.id === 'elvis' || p.isElvis) ? botName : p.name;
         if (!poolState.seasonHistory!.records[cleanName]) {
           poolState.seasonHistory!.records[cleanName] = {
             contenderName: cleanName,
@@ -1585,18 +1704,19 @@ app.post('/api/admin/week-lifecycle', async (req, res) => {
       }
 
       // Reset pick sheets for the newly loaded week
+      const botName = getConfiguredBotName(poolState);
       const cleanPicks: Record<string, PlayerPickData> = {};
       (poolState.players || []).forEach(p => {
-        const cleanName = p.id === 'elvis' ? 'Elvis' : p.name;
+        const cleanName = (p.id === 'elvis' || p.isElvis) ? botName : p.name;
         cleanPicks[cleanName] = {
           contenderName: cleanName,
           picks: {},
           tiebreaker: ''
         };
       });
-      const hasElvis = (poolState.players || []).some(p => p.id === 'elvis' || p.isElvis || p.name === 'Elvis');
+      const hasElvis = (poolState.players || []).some(p => p.id === 'elvis' || p.isElvis || p.name === botName);
       if (hasElvis && poolState.games.length > 0) {
-        cleanPicks['Elvis'] = getElvisVegasFavorites(poolState.games);
+        cleanPicks[botName] = getElvisVegasFavorites(poolState.games, botName);
       }
       poolState.picks = cleanPicks;
 
@@ -1635,12 +1755,13 @@ app.post('/api/admin/week-lifecycle', async (req, res) => {
     }
 
     if (action === 'auto_fill_picks') {
+      const botName = getConfiguredBotName(poolState);
       const games = poolState.games || [];
       const activePlayers = (poolState.players || []).filter(p => p.isActive !== false);
       activePlayers.forEach((p, playerIdx) => {
-        const cleanName = p.id === 'elvis' ? 'Elvis' : p.name;
-        if (p.id === 'elvis' || p.isElvis || cleanName === 'Elvis') {
-          poolState.picks['Elvis'] = getElvisVegasFavorites(games);
+        const cleanName = (p.id === 'elvis' || p.isElvis) ? botName : p.name;
+        if (p.id === 'elvis' || p.isElvis || cleanName === botName) {
+          poolState.picks[botName] = getElvisVegasFavorites(games, botName);
           return;
         }
         const existing = poolState.picks[cleanName]?.picks || {};
@@ -2176,6 +2297,47 @@ app.get('/api/games', (_req, res) => {
   });
 });
 
+// Full season schedule fetcher: Scrapes any week from ESPN on-demand with memory caching (Zero Firestore writes)
+const scheduleCache = new Map<number, { timestamp: number; games: Game[] }>();
+
+app.get('/api/schedule/week/:week', async (req, res) => {
+  try {
+    const weekNum = Math.min(18, Math.max(1, Number(req.params.week) || 1));
+    const cached = scheduleCache.get(weekNum);
+    if (cached && Date.now() - cached.timestamp < 15 * 60 * 1000) {
+      return res.json({ success: true, week: weekNum, games: cached.games });
+    }
+    const currentWeek = poolState.games?.[0]?.week || poolState.poolConfig?.startingWeek;
+    if (weekNum === currentWeek && poolState.games && poolState.games.length > 0) {
+      return res.json({ success: true, week: weekNum, games: poolState.games });
+    }
+    const scrapedOdds = await scrapePointSpreadsForWeek(weekNum);
+    if (scrapedOdds && scrapedOdds.length > 0) {
+      const mappedGames: Game[] = scrapedOdds.map((item, idx) => ({
+        gameNumber: idx + 1,
+        week: weekNum,
+        awayTeam: item.awayTeam,
+        homeTeam: item.homeTeam,
+        awayRecord: item.awayRecord || '',
+        homeRecord: item.homeRecord || '',
+        spread: item.spread || '',
+        favorite: item.favorite || '',
+        overUnder: item.overUnder || 45.0,
+        day: item.day || 'Sun',
+        kickoffTime: item.kickoffTime || '10:00 AM',
+        status: 'scheduled' as const,
+        isMNF: item.isMNF || idx === scrapedOdds.length - 1,
+        isTNF: idx === 0 && (item.day === 'Thu' || item.day === 'Thursday')
+      }));
+      scheduleCache.set(weekNum, { timestamp: Date.now(), games: mappedGames });
+      return res.json({ success: true, week: weekNum, games: mappedGames });
+    }
+    return res.json({ success: false, error: 'Could not fetch schedule from ESPN', games: [] });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Granular slice: Active contenders only
 app.get('/api/players/active', (_req, res) => {
   const activePlayers = (poolState.players || []).filter(p => p.isActive !== false);
@@ -2346,23 +2508,63 @@ app.post('/api/picks', async (req, res) => {
       const gNum = Number(gNumStr);
       const targetGame = poolState.games.find(g => g.gameNumber === gNum);
       if (targetGame && isGameLockedByKickoff(targetGame)) {
-        if (existingPicks[gNum] && existingPicks[gNum] !== team) {
-          console.warn(`[Lockout] Blocked pick modification for ${contenderName} on Game ${gNum} (${targetGame.awayTeam} vs ${targetGame.homeTeam}) - Game already kicked off`);
-          mergedPicks[gNum] = existingPicks[gNum];
+        if (!existingPicks[gNum] || existingPicks[gNum] !== team) {
+          console.warn(`[Lockout] Blocked pick submission/modification for ${contenderName} on Game ${gNum} (${targetGame.awayTeam} vs ${targetGame.homeTeam}) - Game already kicked off`);
+          if (existingPicks[gNum]) {
+            mergedPicks[gNum] = existingPicks[gNum];
+          } else {
+            delete mergedPicks[gNum];
+          }
         }
       }
     }
+  }
+
+  const existingRecord = poolState.picks[contenderName];
+  // Retain auto-default list, but clear any games that the contender manually picked before kickoff
+  let activeAutoDefaultGames = existingRecord?.autoDefaultGames;
+  if (Array.isArray(activeAutoDefaultGames)) {
+    activeAutoDefaultGames = activeAutoDefaultGames.filter(gNum => {
+      const gameObj = poolState.games.find(g => g.gameNumber === gNum);
+      return gameObj ? isGameLockedByKickoff(gameObj) : true;
+    });
   }
 
   const serverTime = new Date().toISOString();
   const newPickRecord: PlayerPickData = {
     contenderName,
     picks: mergedPicks,
-    tiebreaker: tiebreaker !== undefined ? tiebreaker : (poolState.picks[contenderName]?.tiebreaker ?? ''),
-    submittedAt: serverTime
+    tiebreaker: tiebreaker !== undefined ? tiebreaker : (existingRecord?.tiebreaker ?? ''),
+    submittedAt: serverTime,
+    autoDefaultGames: activeAutoDefaultGames && activeAutoDefaultGames.length > 0 ? activeAutoDefaultGames : undefined,
+    isAutoDefaultTiebreaker: existingRecord?.isAutoDefaultTiebreaker
   };
 
   poolState.picks[contenderName] = newPickRecord;
+
+  // If a Friday Night Wire dispatch already exists for the active week, refresh it so its pick summary reflects the new picks
+  try {
+    const activeWeek = poolState.games?.[0]?.week || poolState.poolConfig?.startingWeek || 1;
+    const existingFridayIdx = poolState.dispatches.findIndex(
+      d => d.type === 'friday' && (d.week === activeWeek || d.weekNumber === activeWeek)
+    );
+    if (existingFridayIdx >= 0) {
+      const updatedFriday = await buildVibrantWeeklyDispatch(
+        'friday',
+        activeWeek,
+        poolState.games || [],
+        poolState.players,
+        poolState.picks,
+        poolState.seasonHistory,
+        undefined,
+        undefined,
+        undefined,
+        false,
+        poolState.poolConfig || DEFAULT_POOL_CONFIG
+      );
+      poolState.dispatches[existingFridayIdx] = updatedFriday;
+    }
+  } catch (e) {}
 
   // Persist to cloud Firestore
   if (db) {
@@ -2458,8 +2660,23 @@ function autoCompileWeekResults(weekNumber: number = 2, overrideWinner?: string)
   });
 
   const maxWins = Math.max(...weekScores.map(s => s.wins), 0);
-  const topWeekContenders = weekScores.filter(s => s.wins === maxWins);
-  
+  let topWeekContenders = weekScores.filter(s => s.wins === maxWins);
+
+  // Crown Protection: Contenders who made their own picks take priority over auto-defaults
+  const crownProtection = poolState.poolConfig?.autoVegasCrownProtection !== false;
+  if (crownProtection && topWeekContenders.length > 1) {
+    const manualSubmitters = topWeekContenders.filter(c => {
+      const pRecord = picks[c.name];
+      const botName = getConfiguredBotName(poolState);
+      const isBot = c.name === botName || c.name === 'Elvis';
+      const hasAutoGames = Boolean(pRecord?.autoDefaultGames && pRecord.autoDefaultGames.length > 0);
+      return !isBot && !hasAutoGames;
+    });
+    if (manualSubmitters.length > 0) {
+      topWeekContenders = manualSubmitters;
+    }
+  }
+
   let weekWinnerName = overrideWinner || topWeekContenders[0]?.name || activePlayers[0]?.name || 'Pool Champion';
 
   if (!overrideWinner && topWeekContenders.length > 1) {
@@ -2469,7 +2686,9 @@ function autoCompileWeekResults(weekNumber: number = 2, overrideWinner?: string)
       let bestDiff = Infinity;
       topWeekContenders.forEach(c => {
         if (typeof c.tb === 'number') {
-          const diff = Math.abs(c.tb - mnfActual);
+          const pRecord = picks[c.name];
+          const isAutoTb = Boolean(pRecord?.isAutoDefaultTiebreaker);
+          const diff = Math.abs(c.tb - mnfActual) + (isAutoTb ? 0.001 : 0);
           if (diff < bestDiff) {
             bestDiff = diff;
             weekWinnerName = c.name;
@@ -2767,11 +2986,12 @@ export async function executeTuesdayCyclePipeline(targetWeek?: number, overrideW
     console.log(`[Tuesday Pipeline] Generated schedule and updated point spreads for Week ${nextWeekNumber} (${scrapedOdds.length} games processed).`);
   }
 
-  // Stage 6: Reset active pick sheets to clean slates for Week N+1 (and populate Elvis Vegas Favorites if enabled)
+  // Stage 6: Reset active pick sheets to clean slates for Week N+1 (and populate Vegas Bot Favorites if enabled)
   console.log(`[Tuesday Pipeline] [Stage 6/7] Resetting pick sheets to clean slates for Week ${nextWeekNumber}...`);
+  const botName = getConfiguredBotName(poolState);
   const cleanPicks: Record<string, PlayerPickData> = {};
   (poolState.players || INITIAL_PLAYERS).forEach(p => {
-    const cleanName = p.id === 'elvis' ? 'Elvis' : p.name;
+    const cleanName = (p.id === 'elvis' || p.isElvis) ? botName : p.name;
     cleanPicks[cleanName] = {
       contenderName: cleanName,
       picks: {},
@@ -2779,9 +2999,9 @@ export async function executeTuesdayCyclePipeline(targetWeek?: number, overrideW
     };
   });
 
-  const hasElvis = (poolState.players || []).some(p => p.id === 'elvis' || p.isElvis || p.name === 'Elvis');
+  const hasElvis = (poolState.players || []).some(p => p.id === 'elvis' || p.isElvis || p.name === botName);
   if (hasElvis && poolState.games && poolState.games.length > 0) {
-    cleanPicks['Elvis'] = getElvisVegasFavorites(poolState.games);
+    cleanPicks[botName] = getElvisVegasFavorites(poolState.games, botName);
   }
 
   poolState.picks = cleanPicks;
@@ -3044,15 +3264,17 @@ app.delete('/api/messages/:id', async (req, res) => {
   res.json({ success: true, messages: poolState.messages });
 });
 
-// Auto-generate or refresh Elvis picks using Vegas Insider Favorites
+// Auto-generate or refresh Vegas Bot picks using Vegas Insider Favorites
 app.post('/api/elvis/generate-picks', async (_req, res) => {
-  const elvisPicks = getElvisVegasFavorites(poolState.games || INITIAL_GAMES);
-  poolState.picks['Elvis'] = elvisPicks;
+  const botName = getConfiguredBotName(poolState);
+  const elvisPicks = getElvisVegasFavorites(poolState.games || INITIAL_GAMES, botName);
+  poolState.picks[botName] = elvisPicks;
+  if (botName !== 'Elvis') delete poolState.picks['Elvis'];
   await savePoolState(poolState, true);
   if (db) {
     try {
-      await setDoc(doc(db, 'picks', 'Elvis'), elvisPicks, { merge: true });
-      console.log('[Elvis API] ✓ Elvis picks synced directly to Cloud Firestore.');
+      await setDoc(doc(db, 'picks', botName), elvisPicks, { merge: true });
+      console.log(`[Elvis API] ✓ ${botName} picks synced directly to Cloud Firestore.`);
     } catch (fsErr: any) {
       console.warn('[Elvis API] Cloud Firestore sync warning:', fsErr.message);
     }
@@ -3150,6 +3372,9 @@ app.post('/api/picks/bulk', async (req, res) => {
 // Admin: Audit all picks directly from Firestore
 app.get('/api/admin/audit-cloud-picks', async (_req, res) => {
   try {
+    if (!db) {
+      return res.json({ success: true, count: 0, picks: [] });
+    }
     const snap = await getDocs(collection(db, 'picks'));
     const picks = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     res.json({ success: true, count: snap.size, picks });
@@ -3264,9 +3489,10 @@ app.post('/api/admin/clear-active-picks', async (_req, res) => {
       console.log(`[Clear Picks] Archived existing picks to data/week${currentWeek}-picks-archive.json`);
     }
 
+    const botName = getConfiguredBotName(poolState);
     const cleanPicks: Record<string, PlayerPickData> = {};
     (poolState.players || INITIAL_PLAYERS).forEach(p => {
-      const cleanName = p.id === 'elvis' ? 'Elvis' : p.name;
+      const cleanName = (p.id === 'elvis' || p.isElvis) ? botName : p.name;
       cleanPicks[cleanName] = {
         contenderName: cleanName,
         picks: {},
@@ -3401,9 +3627,15 @@ async function startServer() {
   // Start the decoupled Master Timeclock heartbeat
   startMasterClock();
 
+  const http = await import('http');
+  const httpServer = http.createServer(app);
+
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: process.env.DISABLE_HMR === 'true' ? false : { server: httpServer }
+      },
       appType: 'spa'
     });
     app.use(vite.middlewares);
@@ -3415,8 +3647,19 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[Umpire Pool Fundraiser] Server running on http://0.0.0.0:${PORT}`);
+  let currentPort = PORT;
+  httpServer.on('error', (err: any) => {
+    if (err.code === 'EADDRINUSE') {
+      console.warn(`[Umpire Pool Fundraiser] Port ${currentPort} is in use, trying port ${currentPort + 1}...`);
+      currentPort += 1;
+      httpServer.listen(currentPort, '0.0.0.0');
+    } else {
+      console.error('[Umpire Pool Fundraiser] Server error:', err);
+    }
+  });
+
+  httpServer.listen(currentPort, '0.0.0.0', () => {
+    console.log(`[Umpire Pool Fundraiser] Server running on http://localhost:${currentPort}`);
   });
 }
 

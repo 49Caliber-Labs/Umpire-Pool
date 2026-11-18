@@ -785,7 +785,7 @@ export const FridayWireTab: React.FC<FridayWireTabProps> = memo(({
           <ul className="text-xs text-sky-950/90 space-y-1.5 list-disc pl-4">
             <li>Outdoor venues: Check wind and rain reports before locking final Sunday picks.</li>
             <li>Monday Night Football venue: Optimal conditions projected for the week's tiebreaker showdown.</li>
-            <li>All 16 matchups are tracked live with direct ESPN server-authoritative score syncing.</li>
+            <li>All {games.length || 14} matchups are tracked live with direct ESPN server-authoritative score syncing.</li>
           </ul>
         </div>
       </div>

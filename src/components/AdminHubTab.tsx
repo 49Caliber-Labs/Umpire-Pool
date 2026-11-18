@@ -67,8 +67,8 @@ interface AdminHubTabProps {
   currentWeek?: number;
   onPublishDispatch?: (dispatch: WeeklyDispatch) => Promise<void> | void;
   onDeleteDispatch?: (dispatchId: string) => Promise<void> | void;
-  onUpdatePlayerContact: (id: string, email: string, phone?: string, location?: string, isActive?: boolean) => void;
-  onAddContender?: (name: string, email: string, phone?: string) => Promise<{ success: boolean; error?: string }> | void;
+  onUpdatePlayerContact: (id: string, email: string, phone?: string, location?: string, isActive?: boolean, role?: 'admin' | 'player') => void;
+  onAddContender?: (name: string, email: string, phone?: string, role?: 'admin' | 'player') => Promise<{ success: boolean; error?: string }> | void;
   onAdminSavePicks: (contenderName: string, gamePicks: Record<number, string>, tiebreaker: number | '') => void;
   onUpdateGameStatus: (
     gameNumber: number, 
@@ -196,6 +196,7 @@ export const AdminHubTab: React.FC<AdminHubTabProps> = memo(({
   const [newContenderName, setNewContenderName] = useState<string>('');
   const [newContenderEmail, setNewContenderEmail] = useState<string>('');
   const [newContenderPhone, setNewContenderPhone] = useState<string>('');
+  const [newContenderRole, setNewContenderRole] = useState<'player' | 'admin'>('player');
   const [isAddingContender, setIsAddingContender] = useState<boolean>(false);
 
   // Game Results Filter & Quick Inputs
@@ -233,6 +234,7 @@ export const AdminHubTab: React.FC<AdminHubTabProps> = memo(({
   const [editPhone, setEditPhone] = useState<string>('');
   const [editLocation, setEditLocation] = useState<string>('');
   const [editIsActive, setEditIsActive] = useState<boolean>(true);
+  const [editRole, setEditRole] = useState<'player' | 'admin'>('player');
   const [rosterUpdateMsg, setRosterUpdateMsg] = useState<string | null>(null);
 
   // Dispatch Operations Deck State (Filtered by poolConfig.dispatchCadence)
@@ -724,13 +726,15 @@ export const AdminHubTab: React.FC<AdminHubTabProps> = memo(({
     setSafeTimeout(() => setSaveSuccessMsg(null), 4000);
   };
 
+  const botDisplayName = (poolConfig.elvisBotName || players.find(p => p.isElvis || p.id === 'elvis')?.name || 'Elvis').trim() || 'Elvis';
+
   const handleCopyElvisPicks = () => {
-    const elvisPicks = picks['Elvis']?.picks || picks['Elvis Presley']?.picks;
+    const elvisPicks = picks[botDisplayName]?.picks || picks['Elvis']?.picks || picks['Elvis Presley']?.picks;
     if (elvisPicks && Object.keys(elvisPicks).length > 0) {
       setEditingPicks({ ...elvisPicks });
-      const tb = picks['Elvis']?.tiebreaker || picks['Elvis Presley']?.tiebreaker || '48';
+      const tb = picks[botDisplayName]?.tiebreaker || picks['Elvis']?.tiebreaker || picks['Elvis Presley']?.tiebreaker || '48';
       setEditingTiebreaker(String(tb));
-      setSaveSuccessMsg(`Loaded Elvis's official slate for ${selectedContender}! Remember to click Save.`);
+      setSaveSuccessMsg(`Loaded ${botDisplayName}'s official slate for ${selectedContender}! Remember to click Save.`);
     } else {
       handleFillVegasFavorites();
     }
@@ -742,12 +746,12 @@ export const AdminHubTab: React.FC<AdminHubTabProps> = memo(({
     try {
       const res = await generateElvisPicksGlobally();
       if (res.success && res.elvisPicks) {
-        onAdminSavePicks('Elvis', res.elvisPicks.picks, res.elvisPicks.tiebreaker);
-        if (selectedContender === 'Elvis') {
+        onAdminSavePicks(botDisplayName, res.elvisPicks.picks, res.elvisPicks.tiebreaker);
+        if (selectedContender === botDisplayName || selectedContender === 'Elvis') {
           setEditingPicks({ ...res.elvisPicks.picks });
           setEditingTiebreaker(String(res.elvisPicks.tiebreaker));
         }
-        setSaveSuccessMsg(`✓ Elvis (The King) picks updated with Vegas favorites and locked on the board!`);
+        setSaveSuccessMsg(`✓ ${botDisplayName} (Vegas Bot) picks updated with Vegas favorites and locked on the board!`);
         setSafeTimeout(() => setSaveSuccessMsg(null), 5000);
       } else {
         const vegasPicks: Record<number, string> = {};
@@ -756,12 +760,12 @@ export const AdminHubTab: React.FC<AdminHubTabProps> = memo(({
         });
         const mnf = games.find(g => g.isMNF);
         const tb = mnf && mnf.overUnder ? Math.round(mnf.overUnder) : 48;
-        onAdminSavePicks('Elvis', vegasPicks, tb);
-        setSaveSuccessMsg(`✓ Elvis (The King) picks saved on the board!`);
+        onAdminSavePicks(botDisplayName, vegasPicks, tb);
+        setSaveSuccessMsg(`✓ ${botDisplayName} (Vegas Bot) picks saved on the board!`);
         setSafeTimeout(() => setSaveSuccessMsg(null), 5000);
       }
     } catch (e: any) {
-      console.error('Failed to sync Elvis:', e);
+      console.error('Failed to sync Vegas Bot:', e);
     } finally {
       setIsSyncingElvis(false);
     }
@@ -948,16 +952,43 @@ export const AdminHubTab: React.FC<AdminHubTabProps> = memo(({
     setEditPhone(player.phone || '');
     setEditLocation(player.location || '');
     setEditIsActive(player.isActive !== false);
+    setEditRole(player.role === 'admin' ? 'admin' : 'player');
   };
 
   const handleSavePlayerContact = (e: React.FormEvent) => {
     e.preventDefault();
     if (editingPlayer) {
-      onUpdatePlayerContact(editingPlayer.id, editEmail, editPhone, editLocation, editIsActive);
-      setRosterUpdateMsg(`Updated contact info & status for ${editingPlayer.name}!`);
+      onUpdatePlayerContact(
+        editingPlayer.id,
+        editEmail,
+        editPhone,
+        editLocation,
+        editIsActive,
+        editingPlayer.isElvis ? 'player' : editRole
+      );
+      setRosterUpdateMsg(`Updated contact info, role & status for ${editingPlayer.name}!`);
       setEditingPlayer(null);
       setSafeTimeout(() => setRosterUpdateMsg(null), 3000);
     }
+  };
+
+  const handleToggleAdminRole = (player: Player) => {
+    if (player.isElvis || player.id === 'elvis') return;
+    const nextRole: 'admin' | 'player' = player.role === 'admin' ? 'player' : 'admin';
+    onUpdatePlayerContact(
+      player.id,
+      player.email,
+      player.phone,
+      player.location,
+      player.isActive !== false,
+      nextRole
+    );
+    setRosterUpdateMsg(
+      nextRole === 'admin'
+        ? `Granted Pool Co-Admin access to ${player.name}!`
+        : `Updated ${player.name} back to standard Contender role.`
+    );
+    setSafeTimeout(() => setRosterUpdateMsg(null), 3500);
   };
 
   // Filtered games
@@ -1227,7 +1258,7 @@ export const AdminHubTab: React.FC<AdminHubTabProps> = memo(({
           }`}
         >
           <Edit3 className={`w-4 h-4 ${activeSection === 'overrides' ? 'text-amber-300' : 'text-purple-700'}`} />
-          <span>Senior Pick Overrider</span>
+          <span>Pick Overrider</span>
         </button>
 
         <button
@@ -1535,7 +1566,7 @@ export const AdminHubTab: React.FC<AdminHubTabProps> = memo(({
         </div>
       )}
 
-      {/* SECTION 2: SENIOR MEMBER PICK OVERRIDER */}
+      {/* SECTION 2: PICK OVERRIDER */}
       {(activeSection === 'overrides' || activeSection === 'all') && (
         <div className="bg-white rounded-2xl p-5 sm:p-6 border-2 border-purple-300 shadow-sm space-y-5">
           {/* Section Header */}
@@ -1545,11 +1576,11 @@ export const AdminHubTab: React.FC<AdminHubTabProps> = memo(({
                 <span className="w-3 h-3 rounded-full bg-purple-600"></span>
                 <h3 className="text-lg font-black text-slate-900 tracking-tight flex items-center gap-2">
                   <Edit3 className="w-5 h-5 text-purple-700" />
-                  <span>Admin Pick Overrider (Senior Member Assistance)</span>
+                  <span>Pick Overrider (Contender Assistance)</span>
                 </h3>
               </div>
               <p className="text-xs text-slate-600 mt-0.5">
-                If a senior contender phones or texts you their picks, select their name, click their picks, and save.
+                If a contender phones, texts, or emails you their picks, select their name below, enter their picks, and save.
               </p>
             </div>
 
@@ -1565,7 +1596,7 @@ export const AdminHubTab: React.FC<AdminHubTabProps> = memo(({
               >
                 {players.map(p => (
                   <option key={p.id} value={p.name}>
-                    {p.name} {p.isElvis ? '(The King)' : ''} {p.isDefendingChamp ? '🏆' : ''}
+                    {p.name} {p.isElvis ? '(Vegas Favs Bot)' : ''} {p.isDefendingChamp ? '🏆' : ''}
                   </option>
                 ))}
               </select>
@@ -1590,9 +1621,9 @@ export const AdminHubTab: React.FC<AdminHubTabProps> = memo(({
                 onClick={handleSyncElvisToBoard}
                 disabled={isSyncingElvis}
                 className="flex items-center gap-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 font-black border-2 border-amber-600 px-3 py-1 rounded-lg transition-colors cursor-pointer text-xs shadow-2xs disabled:opacity-50"
-                title="Generate & lock Elvis's Vegas Insider favorites onto the master board"
+                title={`Generate & lock ${botDisplayName}'s Vegas Insider favorites onto the master board`}
               >
-                <span>{isSyncingElvis ? 'Syncing...' : '🕶️ Sync Elvis to Board'}</span>
+                <span>{isSyncingElvis ? 'Syncing...' : `🕶️ Sync ${botDisplayName} to Board`}</span>
               </button>
 
               <button
@@ -1608,10 +1639,10 @@ export const AdminHubTab: React.FC<AdminHubTabProps> = memo(({
                 type="button"
                 onClick={handleCopyElvisPicks}
                 className="flex items-center gap-1.5 bg-white hover:bg-purple-100 text-purple-900 font-bold border-2 border-purple-300 px-3 py-1 rounded-lg transition-colors cursor-pointer text-xs"
-                title="Copy Elvis's official pool slate"
+                title={`Copy ${botDisplayName}'s official pool slate`}
               >
                 <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-                <span>Copy Elvis's Slate</span>
+                <span>Copy {botDisplayName}&rsquo;s Slate</span>
               </button>
             </div>
           </div>
@@ -2303,20 +2334,21 @@ export const AdminHubTab: React.FC<AdminHubTabProps> = memo(({
               setIsAddingContender(true);
               try {
                 if (onAddContender) {
-                  await onAddContender(cleanName, newContenderEmail.trim(), newContenderPhone.trim() || undefined);
+                  await onAddContender(cleanName, newContenderEmail.trim(), newContenderPhone.trim() || undefined, newContenderRole);
                 }
                 setNewContenderName('');
                 setNewContenderEmail('');
                 setNewContenderPhone('');
-                setRosterUpdateMsg(`Added "${cleanName}" to the active pool roster with a fresh pick sheet!`);
+                setNewContenderRole('player');
+                setRosterUpdateMsg(`Added "${cleanName}" (${newContenderRole === 'admin' ? 'Pool Co-Admin' : 'Contender'}) to the active pool roster with a fresh pick sheet!`);
                 setSafeTimeout(() => setRosterUpdateMsg(null), 4000);
               } finally {
                 setIsAddingContender(false);
               }
             }}
-            className="bg-emerald-50/70 border-2 border-emerald-300 rounded-xl p-3.5 flex flex-col sm:flex-row items-stretch sm:items-end gap-2.5"
+            className="bg-emerald-50/70 border-2 border-emerald-300 rounded-xl p-3.5 flex flex-col sm:flex-row items-stretch sm:items-end gap-2.5 flex-wrap"
           >
-            <div className="flex-1">
+            <div className="flex-1 min-w-[160px]">
               <label className="block text-[11px] font-black text-emerald-950 uppercase tracking-wide mb-1">
                 + Add Contender Anytime (Name)
               </label>
@@ -2329,7 +2361,7 @@ export const AdminHubTab: React.FC<AdminHubTabProps> = memo(({
                 className="w-full px-3 py-2 text-xs bg-white border-2 border-emerald-300 rounded-xl font-bold text-slate-900 focus:outline-none focus:border-emerald-700"
               />
             </div>
-            <div className="flex-1">
+            <div className="flex-1 min-w-[180px]">
               <label className="block text-[11px] font-bold text-slate-700 mb-1">
                 Email Address (for Dispatches)
               </label>
@@ -2341,7 +2373,7 @@ export const AdminHubTab: React.FC<AdminHubTabProps> = memo(({
                 className="w-full px-3 py-2 text-xs bg-white border-2 border-slate-300 rounded-xl font-medium text-slate-900 focus:outline-none focus:border-emerald-700"
               />
             </div>
-            <div className="sm:w-44">
+            <div className="sm:w-36">
               <label className="block text-[11px] font-bold text-slate-700 mb-1">
                 Phone (Optional)
               </label>
@@ -2352,6 +2384,19 @@ export const AdminHubTab: React.FC<AdminHubTabProps> = memo(({
                 placeholder="(555) 123-4567"
                 className="w-full px-3 py-2 text-xs bg-white border-2 border-slate-300 rounded-xl font-medium text-slate-900 focus:outline-none focus:border-emerald-700"
               />
+            </div>
+            <div className="sm:w-36">
+              <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                Access Role
+              </label>
+              <select
+                value={newContenderRole}
+                onChange={(e) => setNewContenderRole(e.target.value as 'player' | 'admin')}
+                className="w-full px-3 py-2 text-xs bg-white border-2 border-slate-300 rounded-xl font-bold text-slate-900 focus:outline-none focus:border-emerald-700 cursor-pointer"
+              >
+                <option value="player">Contender</option>
+                <option value="admin">Co-Admin</option>
+              </select>
             </div>
             <button
               type="submit"
@@ -2398,8 +2443,8 @@ export const AdminHubTab: React.FC<AdminHubTabProps> = memo(({
                     </td>
                     <td className="px-4 py-3">
                       {player.role === 'admin' && (
-                        <span className="bg-slate-200 text-slate-900 border border-slate-400 px-2 py-0.5 rounded-md font-black">
-                          The Admin
+                        <span className="bg-amber-200 text-amber-950 border border-amber-400 px-2 py-0.5 rounded-md font-black">
+                          Pool Admin
                         </span>
                       )}
                       {player.role === 'consultant' && (
@@ -2408,16 +2453,16 @@ export const AdminHubTab: React.FC<AdminHubTabProps> = memo(({
                         </span>
                       )}
                       {player.isDefendingChamp && (
-                        <span className="bg-amber-200 text-amber-950 border border-amber-400 px-2 py-0.5 rounded-md font-black">
+                        <span className="bg-amber-200 text-amber-950 border border-amber-400 px-2 py-0.5 rounded-md font-black ml-1">
                           Defending Champ
                         </span>
                       )}
                       {player.isElvis && (
                         <span className="bg-purple-200 text-purple-950 border border-purple-300 px-2 py-0.5 rounded-md font-black">
-                          The King
+                          Vegas Favs Bot
                         </span>
                       )}
-                      {player.role === 'player' && !player.isDefendingChamp && (
+                      {player.role === 'player' && !player.isDefendingChamp && !player.isElvis && (
                         <span className="text-slate-600 font-bold">Contender</span>
                       )}
                       {player.isActive === false && (
@@ -2434,6 +2479,20 @@ export const AdminHubTab: React.FC<AdminHubTabProps> = memo(({
                     </td>
                     <td className="px-4 py-3 text-right">
                       <div className="flex items-center justify-end gap-2">
+                        {!player.isElvis && player.id !== 'elvis' && (
+                          <button
+                            type="button"
+                            onClick={() => handleToggleAdminRole(player)}
+                            className={`font-bold px-2.5 py-1 rounded-lg border cursor-pointer text-xs transition-colors ${
+                              player.role === 'admin'
+                                ? 'bg-amber-100 hover:bg-amber-200 text-amber-950 border-amber-400'
+                                : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-300'
+                            }`}
+                            title={player.role === 'admin' ? 'Click to change back to standard Contender' : 'Grant Co-Admin privileges to help maintain the pool'}
+                          >
+                            {player.role === 'admin' ? '★ Admin' : 'Make Admin'}
+                          </button>
+                        )}
                         <button
                           onClick={() => handleOpenEditPlayer(player)}
                           className="bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold px-2.5 py-1 rounded-lg border border-slate-300 cursor-pointer text-xs"
@@ -2499,6 +2558,28 @@ export const AdminHubTab: React.FC<AdminHubTabProps> = memo(({
                       className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-900 focus:outline-none focus:border-emerald-700"
                     />
                   </div>
+
+                  {!editingPlayer.isElvis && editingPlayer.id !== 'elvis' && (
+                    <div className="p-3 bg-amber-50/70 border-2 border-amber-200 rounded-xl flex items-center justify-between">
+                      <div>
+                        <span className="text-xs font-bold text-slate-900 block">Pool Admin Privileges:</span>
+                        <span className="text-[11px] text-slate-600">
+                          {editRole === 'admin' ? 'Co-Admin (Can manage picks & pool settings)' : 'Standard Contender (Can only submit own picks)'}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setEditRole(editRole === 'admin' ? 'player' : 'admin')}
+                        className={`px-3 py-1 rounded-lg text-xs font-bold transition-colors cursor-pointer border ${
+                          editRole === 'admin'
+                            ? 'bg-amber-200 text-amber-950 border-amber-400 hover:bg-amber-300'
+                            : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                        }`}
+                      >
+                        {editRole === 'admin' ? '★ Pool Admin' : 'Make Co-Admin'}
+                      </button>
+                    </div>
+                  )}
 
                   <div className="p-3 bg-slate-50 border-2 border-slate-200 rounded-xl flex items-center justify-between">
                     <div>

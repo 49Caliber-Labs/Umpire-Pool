@@ -1,17 +1,20 @@
 import React, { memo } from 'react';
-import { Sparkles, Trophy } from 'lucide-react';
+import { getSavedPoolConfig } from '../config/leagueConfig';
 
 interface ElvisBadgeProps {
   showSubtitle?: boolean;
   compact?: boolean;
+  botName?: string;
 }
 
-export const ElvisBadge: React.FC<ElvisBadgeProps> = memo(({ showSubtitle = true, compact = false }) => {
+export const ElvisBadge: React.FC<ElvisBadgeProps> = memo(({ showSubtitle = true, compact = false, botName }) => {
+  const resolvedBotName = (botName || getSavedPoolConfig().elvisBotName || 'Elvis').trim() || 'Elvis';
+
   if (compact) {
     return (
       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-900 border border-amber-300">
         <span>🕶️</span>
-        <span>Elvis</span>
+        <span>{resolvedBotName}</span>
       </span>
     );
   }
@@ -23,7 +26,7 @@ export const ElvisBadge: React.FC<ElvisBadgeProps> = memo(({ showSubtitle = true
       </div>
       <div>
         <div className="flex items-center gap-1.5 font-bold text-xs text-amber-950">
-          <span>Elvis</span>
+          <span>{resolvedBotName}</span>
           <span className="text-[10px] px-1.5 py-0.2 bg-amber-200/80 rounded text-amber-900 font-medium">Honorary Member</span>
         </div>
         {showSubtitle && (

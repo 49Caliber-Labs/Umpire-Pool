@@ -204,10 +204,15 @@ export function normalizeAllPicks(
       foundKey = rawPicksLower[pNameLower].key;
     }
     
-    // Handle Elvis special case
-    if (!raw && pName === 'Elvis' && rawPicksLower['elvis presley']) {
-      raw = rawPicksLower['elvis presley'].data;
-      foundKey = 'Elvis Presley';
+    // Handle Elvis / custom Vegas Favorites Bot special case
+    if (!raw && (player.isElvis || player.id === 'elvis' || pName === 'Elvis')) {
+      if (rawPicksLower['elvis']) {
+        raw = rawPicksLower['elvis'].data;
+        foundKey = rawPicksLower['elvis'].key;
+      } else if (rawPicksLower['elvis presley']) {
+        raw = rawPicksLower['elvis presley'].data;
+        foundKey = 'Elvis Presley';
+      }
     }
 
     normalized[pName] = normalizePickData(pName, raw, games);

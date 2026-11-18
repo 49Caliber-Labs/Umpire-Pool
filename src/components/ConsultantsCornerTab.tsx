@@ -98,8 +98,12 @@ export const ConsultantsCornerTab: React.FC<ConsultantsCornerTabProps> = memo(({
             <div className="text-xs text-emerald-300 uppercase font-bold tracking-wider">
               Your Crew Leadership
             </div>
-            <div className="text-sm font-bold text-white">{cfg.crewChiefName}: {cfg.crewChiefTitle}</div>
-            <div className="text-xs text-emerald-200">{cfg.adminName}: Pool Admin</div>
+            <div className="text-sm font-bold text-white">
+              {cfg.crewChiefName && cfg.crewChiefName.trim().toLowerCase() !== (cfg.crewChiefTitle || 'Umpire-in-Chief').trim().toLowerCase()
+                ? `${cfg.crewChiefName}: ${cfg.crewChiefTitle || 'Umpire-in-Chief'}`
+                : `${cfg.adminName || 'Pool Admin'}: ${cfg.crewChiefTitle || 'Umpire-in-Chief'}`}
+            </div>
+            <div className="text-xs text-emerald-200">{cfg.adminName || 'Pool Admin'}: Pool Admin</div>
           </div>
         </div>
 
@@ -172,7 +176,7 @@ export const ConsultantsCornerTab: React.FC<ConsultantsCornerTabProps> = memo(({
         </div>
       </div>
 
-      {/* The Tradition of Elvis (Vegas Favorites Bot) */}
+      {/* The Tradition of the Vegas Favorites Bot */}
       <div className="bg-gradient-to-r from-amber-50 to-yellow-50 rounded-2xl p-6 border border-amber-200 shadow-xs">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
@@ -181,13 +185,13 @@ export const ConsultantsCornerTab: React.FC<ConsultantsCornerTabProps> = memo(({
               Why &ldquo;{cfg.elvisBotName || 'Elvis'}&rdquo; Is in the Pool (The Vegas Favorites Benchmark)
             </h3>
           </div>
-          <ElvisBadge compact={true} />
+          <ElvisBadge compact={true} botName={cfg.elvisBotName} />
         </div>
         <p className="text-xs sm:text-sm text-amber-900/90 leading-relaxed mb-3">
-          In the original 1986 pool, a fellow volunteer umpire bought an extra $20 spot every single season for <strong>Elvis Presley</strong> to put an extra $20 into the umpire gear kitty.
+          In the original 1986 pool, a fellow volunteer umpire bought an extra ${cfg.buyInAmount} spot every single season for an honorary celebrity guest (originally dubbed <strong>&ldquo;Elvis&rdquo;</strong>) just to put an extra ${cfg.buyInAmount} into the umpire gear kitty.
         </p>
         <p className="text-xs sm:text-sm text-amber-900/90 leading-relaxed">
-          To make sure Elvis had his own independent slate each week, <strong>{cfg.elvisBotName || 'Elvis'}</strong> automatically locks in the official Las Vegas favorites every week—serving as the pool&rsquo;s automated pacer to see which human contenders can out-pick Vegas!
+          Carrying that tradition forward in our league, <strong>{cfg.elvisBotName || 'Elvis'}</strong> serves as our honorary automated contender and locks in the official Las Vegas point-spread favorites every week—giving everyone in the pool a weekly benchmark to see who can out-pick Vegas!
         </p>
       </div>
 

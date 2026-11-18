@@ -20,6 +20,8 @@ export interface PoolSetupConfig {
   elvisBotName: string;
   enableFineJar: boolean;
   fineJarTitle: string;
+  enableAutoVegasFavoritesFallback: boolean;
+  autoVegasCrownProtection: boolean;
   startingWeek: number;
   updatedAt?: string;
 }
@@ -43,6 +45,8 @@ export const DEFAULT_POOL_CONFIG: PoolSetupConfig = {
   elvisBotName: 'Elvis',
   enableFineJar: true,
   fineJarTitle: '$1 Umpire Fine Jar',
+  enableAutoVegasFavoritesFallback: true,
+  autoVegasCrownProtection: true,
   startingWeek: 1,
 };
 

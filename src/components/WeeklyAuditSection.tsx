@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   ShieldCheck, 
   Lock, 
@@ -56,13 +56,30 @@ export const WeeklyAuditSection: React.FC<WeeklyAuditSectionProps> = ({
   onNavigateToOverrides
 }) => {
   const [activeSubTab, setActiveSubTab] = useState<'historical' | 'submissions'>('historical');
+
+  const activeGameWeek = useMemo(() => {
+    const fromGames = games.find(g => typeof g.week === 'number' && g.week > 0)?.week || games[0]?.week;
+    const fromConfig = getSavedPoolConfig().startingWeek;
+    const maxCompiled = seasonHistory?.compiledWeeks && seasonHistory.compiledWeeks.length > 0
+      ? Math.max(...seasonHistory.compiledWeeks)
+      : 1;
+    return Math.min(18, Math.max(1, fromGames || fromConfig || maxCompiled || 1));
+  }, [games, seasonHistory?.compiledWeeks]);
+
   const compiledWeeks = useMemo(() => {
-    const weeks = seasonHistory?.compiledWeeks && seasonHistory.compiledWeeks.length > 0
-      ? Array.from(new Set([...seasonHistory.compiledWeeks, 1, 2]))
-      : [1, 2];
-    return weeks.sort((a, b) => a - b);
-  }, [seasonHistory?.compiledWeeks]);
-  const [selectedWeek, setSelectedWeek] = useState<number>(2);
+    const maxWeek = Math.min(18, Math.max(activeGameWeek, ...(seasonHistory?.compiledWeeks || []), 1));
+    const weekSet = new Set<number>(seasonHistory?.compiledWeeks || []);
+    for (let w = 1; w <= maxWeek; w++) {
+      weekSet.add(w);
+    }
+    return Array.from(weekSet).filter(w => w >= 1 && w <= 18).sort((a, b) => a - b);
+  }, [activeGameWeek, seasonHistory?.compiledWeeks]);
+
+  const [selectedWeek, setSelectedWeek] = useState<number>(() => activeGameWeek);
+
+  useEffect(() => {
+    setSelectedWeek(activeGameWeek);
+  }, [activeGameWeek]);
   const [copiedAudit, setCopiedAudit] = useState<boolean>(false);
   const [isCompiling, setIsCompiling] = useState<boolean>(false);
   const [compileSuccessMsg, setCompileSuccessMsg] = useState<string | null>(null);
@@ -111,23 +128,24 @@ export const WeeklyAuditSection: React.FC<WeeklyAuditSectionProps> = ({
   // Contenders audit comparison for the selected week
   const auditedContenders = useMemo(() => {
     const records = seasonHistory?.records || {};
+    const isCurrentActiveWeek = selectedWeek === activeGameWeek;
     return activePlayers.map(p => {
       const rec = records[p.name];
       const wkRecord = rec?.weeklyBreakdown?.[selectedWeek];
-      const frozenWins = wkRecord ? wkRecord.wins : 0;
-      const frozenLosses = wkRecord ? wkRecord.losses : 0;
-      const frozenTB = wkRecord ? wkRecord.tiebreaker : (picks[p.name]?.tiebreaker ?? '');
+      const live = liveSheetScores[p.name] || { wins: 0, losses: 0, tiebreaker: '' };
+      const hasFinalGames = finalGames.length > 0;
+
+      const frozenWins = wkRecord ? wkRecord.wins : (isCurrentActiveWeek && hasFinalGames ? live.wins : 0);
+      const frozenLosses = wkRecord ? wkRecord.losses : (isCurrentActiveWeek && hasFinalGames ? live.losses : 0);
+      const frozenTB = wkRecord ? wkRecord.tiebreaker : (isCurrentActiveWeek ? (picks[p.name]?.tiebreaker ?? '') : '');
       const isWinner = wkRecord?.isWinner || false;
       const isRecordLocked = wkRecord?.isLocked ?? isWeekLocked;
       const auditedAt = wkRecord?.auditedAt;
       const auditNotes = wkRecord?.auditNotes;
 
-      const live = liveSheetScores[p.name] || { wins: 0, losses: 0, tiebreaker: '' };
-      
-      // Calculate score drift (discrepancy between frozen record and current live sheet)
-      const hasFinalGames = finalGames.length > 0;
-      const drift = hasFinalGames ? live.wins - frozenWins : 0;
-      const hasDrift = hasFinalGames && (live.wins !== frozenWins || live.losses !== frozenLosses);
+      // Calculate score drift (discrepancy between frozen record and current live sheet for the active week)
+      const drift = (isCurrentActiveWeek && wkRecord && hasFinalGames) ? live.wins - wkRecord.wins : 0;
+      const hasDrift = Boolean(isCurrentActiveWeek && wkRecord && hasFinalGames && (live.wins !== wkRecord.wins || live.losses !== wkRecord.losses));
 
       // Calculate compiled season total wins across all weeks for this contender
       const weeklyBreakdown = rec?.weeklyBreakdown || {};
@@ -135,19 +153,19 @@ export const WeeklyAuditSection: React.FC<WeeklyAuditSectionProps> = ({
       let compiledSeasonLosses = 0;
       const weekParts: string[] = [];
 
-      Object.entries(weeklyBreakdown).forEach(([wStr, wData]: any) => {
-        compiledSeasonWins += Number(wData.wins || 0);
-        compiledSeasonLosses += Number(wData.losses || 0);
-        weekParts.push(`W${wStr}:${wData.wins}W`);
-      });
+      Object.entries(weeklyBreakdown)
+        .sort(([a], [b]) => Number(a) - Number(b))
+        .forEach(([wStr, wData]: any) => {
+          compiledSeasonWins += Number(wData.wins || 0);
+          compiledSeasonLosses += Number(wData.losses || 0);
+          weekParts.push(`W${wStr}:${wData.wins}W`);
+        });
 
       // If active week has frozen or live scores not yet in weeklyBreakdown, add it
-      if (!weeklyBreakdown[selectedWeek] && (frozenWins > 0 || (hasFinalGames && live.wins > 0))) {
-        const addedWins = frozenWins > 0 ? frozenWins : live.wins;
-        const addedLosses = frozenLosses > 0 ? frozenLosses : live.losses;
-        compiledSeasonWins += addedWins;
-        compiledSeasonLosses += addedLosses;
-        weekParts.push(`W${selectedWeek}:${addedWins}W`);
+      if (!weeklyBreakdown[activeGameWeek] && hasFinalGames && live.wins > 0) {
+        compiledSeasonWins += live.wins;
+        compiledSeasonLosses += live.losses;
+        weekParts.push(`W${activeGameWeek}:${live.wins}W`);
       }
 
       return {
@@ -173,7 +191,7 @@ export const WeeklyAuditSection: React.FC<WeeklyAuditSectionProps> = ({
       if (b.frozenWins !== a.frozenWins) return b.frozenWins - a.frozenWins;
       return a.player.name.localeCompare(b.player.name);
     });
-  }, [activePlayers, seasonHistory, selectedWeek, isWeekLocked, liveSheetScores, picks, finalGames.length]);
+  }, [activePlayers, seasonHistory, selectedWeek, activeGameWeek, isWeekLocked, liveSheetScores, picks, finalGames.length]);
 
   const totalDriftCount = auditedContenders.filter(c => c.hasDrift).length;
 
@@ -241,12 +259,15 @@ export const WeeklyAuditSection: React.FC<WeeklyAuditSectionProps> = ({
 
   const handleRecompileFromSheet = async () => {
     if (!onCompileWeekResults) return;
+    const confirmMsg = `📊 RECORD WEEK ${selectedWeek} SCORES INTO SEASON LEDGER:\n\nThis will snapshot each contender's current wins/losses from the live Week ${selectedWeek} scoring spreadsheet directly into the official Cumulative Season Standings ledger.\n\nAre you sure you want to record Week ${selectedWeek} results now?`;
+    if (!window.confirm(confirmMsg)) return;
+
     setIsCompiling(true);
     const res = await onCompileWeekResults(selectedWeek);
     setIsCompiling(false);
     if (res.success) {
-      setCompileSuccessMsg(`Week ${selectedWeek} successfully recalculated and updated!`);
-      setTimeout(() => setCompileSuccessMsg(null), 3500);
+      setCompileSuccessMsg(`Week ${selectedWeek} scores successfully recorded into the season standings ledger!`);
+      setTimeout(() => setCompileSuccessMsg(null), 4000);
     }
   };
 
@@ -366,15 +387,15 @@ export const WeeklyAuditSection: React.FC<WeeklyAuditSectionProps> = ({
                 <span>{copiedAudit ? 'Copied Ledger!' : 'Copy Audit Report'}</span>
               </button>
 
-              {onCompileWeekResults && !isWeekLocked && (
+              {onCompileWeekResults && !isWeekLocked && selectedWeek === activeGameWeek && (
                 <button
                   onClick={handleRecompileFromSheet}
                   disabled={isCompiling}
                   className="px-3 py-1.5 rounded-lg text-xs font-black bg-emerald-800 hover:bg-emerald-900 text-amber-300 border border-emerald-950 transition-all cursor-pointer flex items-center gap-1.5 shadow-xs"
-                  title={`Compile Week ${selectedWeek} scores into the season total wins ledger`}
+                  title={`Snapshot current live spreadsheet scores for Week ${activeGameWeek} into the season total wins ledger`}
                 >
                   <RefreshCw className={`w-3.5 h-3.5 text-amber-300 ${isCompiling ? 'animate-spin' : ''}`} />
-                  <span>Compile Week {selectedWeek} into Season</span>
+                  <span>Record Week {activeGameWeek} into Season Ledger</span>
                 </button>
               )}
 

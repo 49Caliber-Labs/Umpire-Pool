@@ -25,7 +25,7 @@ import {
 import { Game, Player } from '../types';
 import { AnniversaryBadge } from './AnniversaryBadge';
 import { LiveScoreboardTicker } from './LiveScoreboardTicker';
-import { isAdminPinUnlocked } from '../utils/adminAuth';
+import { isAdminPinUnlocked, verifyAdminPin, setAdminPinUnlocked } from '../utils/adminAuth';
 import { PoolSetupConfig, getSavedPoolConfig } from '../config/leagueConfig';
 
 export type TabId = 'picks' | 'leaderboard' | 'consultant' | 'wire' | 'locker' | 'admin';
@@ -255,13 +255,29 @@ export const AppNavigation: React.FC<NavigationProps> = memo(({
                   <span className="text-emerald-300 font-medium text-[10px] sm:text-xs">Player:</span>
                   <span className="font-bold text-white flex items-center gap-0.5 text-[11px] sm:text-xs truncate max-w-[80px] sm:max-w-[120px]">
                     {activePlayer.name}
+                    {activePlayer.role === 'admin' && (
+                      <span className="ml-0.5 text-[9px] text-amber-300 font-black">★</span>
+                    )}
                   </span>
                   <button 
-                    onClick={() => onSelectPlayer(null)}
-                    className="text-[10px] sm:text-[11px] text-amber-300 hover:text-amber-200 underline cursor-pointer ml-0.5 font-semibold"
-                    title="Switch contender"
+                    onClick={() => {
+                      if (activePlayer.role === 'admin' || isAdminUnlocked) {
+                        onSelectPlayer(null);
+                      } else {
+                        const entered = window.prompt('Contender identity is locked so players cannot enter picks on someone else\'s behalf.\n\nPool Admin: Enter 4-digit Admin PIN to switch contenders:');
+                        if (entered !== null && verifyAdminPin(entered)) {
+                          setAdminPinUnlocked(true);
+                          onSelectPlayer(null);
+                        } else if (entered !== null) {
+                          window.alert('Incorrect Admin PIN. Only Pool Admins can switch contenders.');
+                        }
+                      }
+                    }}
+                    className="text-[10px] sm:text-[11px] text-amber-300 hover:text-amber-200 underline cursor-pointer ml-0.5 font-semibold inline-flex items-center gap-0.5"
+                    title={activePlayer.role === 'admin' || isAdminUnlocked ? 'Switch contender' : 'Admin PIN required to switch contender'}
                   >
-                    (Switch)
+                    {!(activePlayer.role === 'admin' || isAdminUnlocked) && <Lock className="w-2.5 h-2.5 inline" />}
+                    <span>(Switch)</span>
                   </button>
                 </div>
               ) : (
@@ -300,8 +316,8 @@ export const AppNavigation: React.FC<NavigationProps> = memo(({
                 </button>
               )}
 
-              {/* Setup Wizard Button (Desktop/Tablet) */}
-              {onOpenSetupWizard && (
+              {/* Setup Wizard Button (Desktop/Tablet - Admin Only) */}
+              {onOpenSetupWizard && (activePlayer?.role === 'admin' || isAdminUnlocked) && (
                 <button
                   onClick={onOpenSetupWizard}
                   className="hidden sm:inline-flex h-8 px-2.5 sm:px-3 rounded-lg text-xs font-bold items-center justify-center gap-1.5 border transition-all cursor-pointer shadow-2xs active:scale-95 whitespace-nowrap bg-[#142d21] hover:bg-[#1a382a] text-amber-300 hover:text-amber-200 border-emerald-700/70"

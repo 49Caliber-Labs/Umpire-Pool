@@ -25,6 +25,7 @@ import { HelpModal } from './HelpModal';
 import { isGameLockedByKickoff } from '../utils/storageSanitizer';
 import { isGameTie } from '../utils/nflTieEngine';
 import { PoolSetupConfig, DEFAULT_POOL_CONFIG } from '../config/leagueConfig';
+import { isAdminPinUnlocked, setAdminPinUnlocked, verifyAdminPin } from '../utils/adminAuth';
 
 interface WeeklyPicksTabProps {
   games: Game[];
@@ -472,16 +473,51 @@ export const WeeklyPicksTab: React.FC<WeeklyPicksTabProps> = memo(({
   // Local state for the current active form
   const [selectedPicks, setSelectedPicks] = useState<Record<number, string>>({});
   const [tiebreakerInput, setTiebreakerInput] = useState<string>('');
-  const [isSubmittedSuccess, setIsSubmittedSuccess] = useState<boolean>(false);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'offline'>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isHelpOpen, setIsHelpOpen] = useState<boolean>(false);
   const [isUnlockedOverride, setIsUnlockedOverride] = useState<boolean>(false);
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const tbDebounceRef = useRef<NodeJS.Timeout | null>(null);
 
   // Layout & Collapsible states
   const [viewStyle, setViewStyle] = useState<'compact' | 'cards'>(() => isCompactMode ? 'compact' : 'cards');
+  const [isAdminUnlocked, setIsAdminUnlocked] = useState<boolean>(() => isAdminPinUnlocked());
+  const isAdminUser = Boolean(activePlayer?.role === 'admin' || isAdminUnlocked);
   const [isContenderGridOpen, setIsContenderGridOpen] = useState<boolean>(() => !activePlayer);
   const prevPlayerRef = useRef<string | null>(null);
   const prevWeekRef = useRef<number>(activeWeekNumber);
+
+  useEffect(() => {
+    const syncAuth = () => setIsAdminUnlocked(isAdminPinUnlocked());
+    window.addEventListener('admin_auth_changed', syncAuth);
+    return () => window.removeEventListener('admin_auth_changed', syncAuth);
+  }, []);
+
+  // Ensure non-admin contenders have their switcher grid closed once their identity is selected
+  useEffect(() => {
+    if (activePlayer && !isAdminUser) {
+      setIsContenderGridOpen(false);
+      setIsUnlockedOverride(false);
+    }
+  }, [activePlayer, isAdminUser]);
+
+  const handleRequestAdminSwitch = () => {
+    if (isAdminUser) {
+      setIsContenderGridOpen(prev => !prev);
+      return;
+    }
+    const pin = window.prompt('Pool Admin Only: Enter the 4-digit Pool Admin PIN to switch contenders or enter picks on another contender\'s behalf:');
+    if (pin !== null) {
+      if (verifyAdminPin(pin)) {
+        setAdminPinUnlocked(true);
+        setIsAdminUnlocked(true);
+        setIsContenderGridOpen(true);
+      } else {
+        window.alert('Incorrect Admin PIN. Only Pool Admins can switch contenders and input picks on another contender\'s behalf.');
+      }
+    }
+  };
 
   // Clear pick sheet when pool advances to a new week
   useEffect(() => {
@@ -489,7 +525,6 @@ export const WeeklyPicksTab: React.FC<WeeklyPicksTabProps> = memo(({
       prevWeekRef.current = activeWeekNumber;
       setSelectedPicks({});
       setTiebreakerInput('');
-      setIsSubmittedSuccess(false);
       setErrorMessage(null);
     }
   }, [activeWeekNumber]);
@@ -507,7 +542,11 @@ export const WeeklyPicksTab: React.FC<WeeklyPicksTabProps> = memo(({
           if (existing && Object.keys(existing.picks || {}).length > 0) {
             return { ...existing.picks };
           }
-          // If player has no stored picks, keep draft selections made in current session
+          if (Object.keys(prevDraft).length > 0) {
+            // Contender clicked picks before choosing name - auto-save them now under this contender!
+            onSavePicks(activePlayer.name, prevDraft, tiebreakerInput ? Number(tiebreakerInput) : 45, isUnlockedOverride);
+            setSaveStatus('saved');
+          }
           return { ...prevDraft };
         });
         if (existing && existing.tiebreaker !== undefined && existing.tiebreaker !== '') {
@@ -545,20 +584,79 @@ export const WeeklyPicksTab: React.FC<WeeklyPicksTabProps> = memo(({
           }
         }
       }
-      setIsSubmittedSuccess(false);
       setErrorMessage(null);
     }
   }, [activePlayer, allPicks, games]);
 
+  // Clean up debounce timers
+  useEffect(() => {
+    return () => {
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+      if (tbDebounceRef.current) clearTimeout(tbDebounceRef.current);
+    };
+  }, []);
+
+  // Instant Auto-Save on Every Pick Tap
   const handlePickTeam = (gameNumber: number, team: string) => {
-    setSelectedPicks(prev => ({
-      ...prev,
+    const updated = {
+      ...selectedPicks,
       [gameNumber]: team
-    }));
+    };
+    setSelectedPicks(updated);
     setErrorMessage(null);
+
+    if (activePlayer) {
+      setSaveStatus('saving');
+      const existingTb = allPicks[activePlayer.name]?.tiebreaker;
+      let tbNumber: number | '' = existingTb !== undefined && existingTb !== '' ? existingTb : 45;
+      if (tiebreakerInput.trim() !== '') {
+        const parsed = Number(tiebreakerInput);
+        if (!isNaN(parsed) && parsed >= 0 && parsed <= 150) {
+          tbNumber = parsed;
+        }
+      }
+      onSavePicks(activePlayer.name, updated, tbNumber, isUnlockedOverride);
+
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = setTimeout(() => {
+        setSaveStatus(typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'saved');
+      }, 350);
+    } else {
+      // Prompt contender to pick their name to lock and auto-save
+      setIsContenderGridOpen(true);
+    }
   };
 
-  // Quick helper to fill remaining picks with favorites
+  // Debounced Auto-Save for MNF Combined Points Tiebreaker (400ms)
+  const handleTiebreakerChange = (val: string) => {
+    setTiebreakerInput(val);
+    setErrorMessage(null);
+    if (!activePlayer) return;
+
+    if (tbDebounceRef.current) clearTimeout(tbDebounceRef.current);
+    tbDebounceRef.current = setTimeout(() => {
+      let tbNumber: number | '' = '';
+      if (val.trim() !== '') {
+        const parsed = Number(val);
+        if (!isNaN(parsed) && parsed >= 0 && parsed <= 150) {
+          tbNumber = parsed;
+        }
+      }
+      setSaveStatus('saving');
+      const effectiveContenderPicks = {
+        ...(allPicks[activePlayer.name]?.picks || {}),
+        ...selectedPicks
+      };
+      onSavePicks(activePlayer.name, effectiveContenderPicks, tbNumber, isUnlockedOverride);
+
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = setTimeout(() => {
+        setSaveStatus(typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'saved');
+      }, 350);
+    }, 400);
+  };
+
+  // Quick helper to fill remaining unpicked games with favorites and auto-save
   const handleQuickFillFavorites = () => {
     const updated: Record<number, string> = { ...selectedPicks };
     games.forEach(g => {
@@ -567,114 +665,47 @@ export const WeeklyPicksTab: React.FC<WeeklyPicksTabProps> = memo(({
       }
     });
     setSelectedPicks(updated);
-    if (!tiebreakerInput) {
+    let newTb = tiebreakerInput;
+    if (!newTb) {
       const mnfGame = games.find(g => g.isMNF);
       if (mnfGame?.overUnder) {
-        setTiebreakerInput(String(Math.round(mnfGame.overUnder)));
+        newTb = String(Math.round(mnfGame.overUnder));
+        setTiebreakerInput(newTb);
       }
     }
     setErrorMessage(null);
+
+    if (activePlayer) {
+      setSaveStatus('saving');
+      const tbNum = newTb.trim() !== '' ? Number(newTb) : (allPicks[activePlayer.name]?.tiebreaker ?? 45);
+      onSavePicks(activePlayer.name, updated, tbNum, isUnlockedOverride);
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = setTimeout(() => {
+        setSaveStatus(typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'saved');
+      }, 350);
+    }
   };
 
   const handleClearPicks = () => {
     if (window.confirm("Clear all your pick selections on this sheet?")) {
       setSelectedPicks({});
       setTiebreakerInput('');
-    }
-  };
-
-  const handleSubmit = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!activePlayer) {
-      setErrorMessage("Please tap your name from the roster at the top before locking in your picks.");
-      setIsContenderGridOpen(true);
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-      return;
-    }
-
-    const existingContenderPicks = allPicks[activePlayer.name]?.picks || {};
-    const fullMergedPicks = { ...existingContenderPicks, ...selectedPicks };
-
-    // Contenders can submit any pick prior to that game's individual kickoff
-    const pickedCountForContender = Object.keys(fullMergedPicks).length;
-    if (pickedCountForContender === 0) {
-      setErrorMessage("Please select at least one game winner before locking in.");
-      return;
-    }
-
-    const existingTb = allPicks[activePlayer.name]?.tiebreaker;
-    let tbNumber: number | '' = existingTb !== undefined && existingTb !== '' ? existingTb : 45;
-    if (tiebreakerInput.trim() !== '') {
-      const parsed = Number(tiebreakerInput);
-      if (isNaN(parsed) || parsed < 0 || parsed > 150) {
-        setErrorMessage("Please enter a realistic combined total score for Monday Night Football (e.g. 45).");
-        return;
+      if (activePlayer) {
+        setSaveStatus('saving');
+        onSavePicks(activePlayer.name, {}, '', isUnlockedOverride);
+        if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+        saveTimeoutRef.current = setTimeout(() => {
+          setSaveStatus(typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'saved');
+        }, 350);
       }
-      tbNumber = parsed;
     }
-
-    onSavePicks(activePlayer.name, fullMergedPicks, tbNumber, isUnlockedOverride);
-    setIsSubmittedSuccess(true);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
-  const handleResetForAnother = () => {
-    setIsSubmittedSuccess(false);
   };
 
   const effectivePicks = activePlayer ? { ...(allPicks[activePlayer.name]?.picks || {}), ...selectedPicks } : selectedPicks;
   const pickedCount = Object.keys(effectivePicks).filter(k => effectivePicks[Number(k)]).length;
   const isComplete = pickedCount === games.length && games.length > 0;
-  const activeContenders = players.filter(p => p.isActive !== false);
-
-  // Success Confirmation Screen
-  if (isSubmittedSuccess && activePlayer) {
-    return (
-      <div className="max-w-2xl mx-auto py-8 px-4">
-        <div className="bg-white rounded-2xl p-6 sm:p-8 border-2 border-emerald-400 shadow-xl text-center">
-          <div className="w-14 h-14 sm:w-16 sm:h-16 bg-emerald-100 text-emerald-800 rounded-full flex items-center justify-center mx-auto mb-3 text-2xl sm:text-3xl font-black shadow-inner">
-            ✓
-          </div>
-          <h2 className="text-xl sm:text-3xl font-black text-emerald-950 mb-2">
-            Picks Locked In for {activePlayer.name}!
-          </h2>
-          <p className="text-slate-700 mb-5 text-sm sm:text-base leading-relaxed max-w-lg mx-auto">
-            Your official straight-up picks (<strong>{pickedCount} of {games.length} games</strong>) and your Monday Night tiebreaker prediction of{' '}
-            <strong className="text-emerald-900 font-black">{tiebreakerInput ? `${tiebreakerInput} points` : '—'}</strong> have been safely submitted and synchronized with the master pool ledger.
-          </p>
-
-          <div className="p-4 sm:p-5 bg-emerald-50 rounded-xl border border-emerald-200 mb-5 text-left text-xs sm:text-sm text-emerald-950">
-            <div className="font-black flex items-center gap-2 mb-2 text-emerald-900 text-sm sm:text-base">
-              <Trophy className="w-4 h-4 text-amber-600" />
-              <span>Submission Summary ({activePlayer.name}):</span>
-            </div>
-            <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-slate-800 font-medium">
-              <div>Games Selected: <strong className="text-slate-950 font-black">{pickedCount} / {games.length}</strong></div>
-              <div>MNF Tiebreaker: <strong className="text-slate-950 font-black">{tiebreakerInput ? `${tiebreakerInput} pts` : '—'}</strong></div>
-              <div>Scoring Format: <strong className="text-slate-950 font-bold">1 Pt / Outright Win</strong></div>
-              <div>Storage: <strong className="text-emerald-700 font-bold">✓ Synced to Pool</strong></div>
-            </div>
-          </div>
-
-          <div className="flex flex-col sm:flex-row gap-2.5 justify-center">
-            <button
-              onClick={onViewLeaderboard}
-              className="bg-[#1b3a2b] hover:bg-[#142d21] text-white font-extrabold py-3 px-5 rounded-xl text-sm transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer active:scale-95"
-            >
-              <Trophy className="w-4 h-4 text-amber-300" />
-              <span>View Leaderboard & Matrix</span>
-            </button>
-            <button
-              onClick={handleResetForAnother}
-              className="bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold py-3 px-4 rounded-xl text-sm transition-all border border-slate-300 cursor-pointer active:scale-95"
-            >
-              Review / Edit My Picks
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  // Filter out the automated Vegas Bot so human pick sheets only show human contenders
+  const activeContenders = players.filter(p => p.isActive !== false && !p.isElvis && p.id !== 'elvis');
 
   return (
     <div className="max-w-3xl mx-auto py-3 px-2 sm:px-4 pb-20 md:pb-8">
@@ -722,24 +753,36 @@ export const WeeklyPicksTab: React.FC<WeeklyPicksTabProps> = memo(({
           </div>
 
           <div className="flex items-center gap-1.5 shrink-0">
-            {/* Toggle Full Grid */}
-            <button
-              type="button"
-              onClick={() => setIsContenderGridOpen(prev => !prev)}
-              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-900 text-xs font-bold border border-emerald-200 cursor-pointer"
-            >
-              {isContenderGridOpen ? (
-                <>
-                  <ChevronUp className="w-3.5 h-3.5" />
-                  <span>Hide Grid</span>
-                </>
-              ) : (
-                <>
-                  <ChevronDown className="w-3.5 h-3.5" />
-                  <span>{activePlayer ? `Switch (${activeContenders.length})` : 'Show Roster'}</span>
-                </>
-              )}
-            </button>
+            {/* Toggle Full Grid (Admins can freely switch; Non-admins are locked to their own profile once chosen) */}
+            {(!activePlayer || isAdminUser) ? (
+              <button
+                type="button"
+                onClick={() => setIsContenderGridOpen(prev => !prev)}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-900 text-xs font-bold border border-emerald-200 cursor-pointer"
+              >
+                {isContenderGridOpen ? (
+                  <>
+                    <ChevronUp className="w-3.5 h-3.5" />
+                    <span>Hide Grid</span>
+                  </>
+                ) : (
+                  <>
+                    <ChevronDown className="w-3.5 h-3.5" />
+                    <span>{activePlayer ? `Admin Switch (${activeContenders.length})` : 'Show Roster'}</span>
+                  </>
+                )}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleRequestAdminSwitch}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-bold border border-slate-300 cursor-pointer"
+                title="Contenders can only enter their own picks. Pool Admins can enter PIN to switch contenders."
+              >
+                <Lock className="w-3 h-3 text-slate-600" />
+                <span>Admin Switch</span>
+              </button>
+            )}
 
             <button
               type="button"
@@ -754,10 +797,12 @@ export const WeeklyPicksTab: React.FC<WeeklyPicksTabProps> = memo(({
         </div>
 
         {/* Collapsible 1-Tap Name Grid */}
-        {isContenderGridOpen ? (
+        {(isContenderGridOpen && (!activePlayer || isAdminUser)) ? (
           <div className="mt-3 pt-3 border-t border-slate-100">
             <p className="text-[11px] text-slate-600 mb-2">
-              Tap your name below. No password or login needed.
+              {isAdminUser
+                ? 'Admin Mode Active: Tap any contender below to view or enter picks on their behalf.'
+                : 'Tap your name below to lock this device to your contender sheet. (Only Pool Admins can enter picks for other contenders.)'}
             </p>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 sm:gap-2 mb-2">
               {activeContenders.map(p => {
@@ -768,8 +813,22 @@ export const WeeklyPicksTab: React.FC<WeeklyPicksTabProps> = memo(({
                     key={p.id}
                     type="button"
                     onClick={() => {
+                      if (activePlayer && !isAdminUser && p.id !== activePlayer.id) {
+                        handleRequestAdminSwitch();
+                        return;
+                      }
+                      if (p.role === 'admin' && !isAdminUser) {
+                        const pin = window.prompt(`Enter the 4-digit Pool Admin PIN to sign in as ${p.name}:`);
+                        if (pin === null) return;
+                        if (!verifyAdminPin(pin)) {
+                          window.alert('Incorrect Admin PIN.');
+                          return;
+                        }
+                        setAdminPinUnlocked(true);
+                        setIsAdminUnlocked(true);
+                      }
                       onSelectPlayer(p);
-                      if (window.innerWidth < 768) {
+                      if (window.innerWidth < 768 || p.role !== 'admin') {
                         setIsContenderGridOpen(false);
                       }
                     }}
@@ -781,6 +840,7 @@ export const WeeklyPicksTab: React.FC<WeeklyPicksTabProps> = memo(({
                     style={{ touchAction: 'manipulation' }}
                   >
                     <div className="flex items-center gap-1 truncate">
+                      {p.role === 'admin' && <span title="Pool Admin" className="text-[10px]">★</span>}
                       {p.isDefendingChamp && <span title="Defending Champ">🏆</span>}
                       <span className="truncate">{p.name}</span>
                     </div>
@@ -802,14 +862,26 @@ export const WeeklyPicksTab: React.FC<WeeklyPicksTabProps> = memo(({
               <strong className="font-black text-emerald-900 text-xs sm:text-sm truncate">
                 {activePlayer ? activePlayer.name : 'No contender selected'}
               </strong>
+              {activePlayer?.role === 'admin' && (
+                <span className="bg-amber-200 text-amber-950 text-[10px] font-black px-1.5 py-0.2 rounded border border-amber-400">
+                  Admin
+                </span>
+              )}
             </div>
-            <button
-              type="button"
-              onClick={() => setIsContenderGridOpen(true)}
-              className="text-[11px] font-bold text-emerald-700 hover:text-emerald-900 underline cursor-pointer shrink-0 ml-2"
-            >
-              {activePlayer ? 'Change Name' : 'Select Name'}
-            </button>
+            {(!activePlayer || isAdminUser) ? (
+              <button
+                type="button"
+                onClick={() => setIsContenderGridOpen(true)}
+                className="text-[11px] font-bold text-emerald-700 hover:text-emerald-900 underline cursor-pointer shrink-0 ml-2"
+              >
+                {activePlayer ? 'Switch Contender' : 'Select Name'}
+              </button>
+            ) : (
+              <span className="text-[10px] font-bold text-emerald-800 flex items-center gap-1 shrink-0 ml-2">
+                <Lock className="w-3 h-3 text-emerald-700" />
+                <span>Identity Locked</span>
+              </span>
+            )}
           </div>
         )}
       </div>
@@ -859,20 +931,22 @@ export const WeeklyPicksTab: React.FC<WeeklyPicksTabProps> = memo(({
               <span>{pickedCount}/{games.length}</span>
             </div>
 
-            {/* Unlock All Toggle */}
-            <button
-              type="button"
-              onClick={() => setIsUnlockedOverride(prev => !prev)}
-              className={`px-2 py-1 rounded-lg text-[11px] font-bold transition-colors cursor-pointer border flex items-center gap-1 ${
-                isUnlockedOverride 
-                  ? 'bg-amber-400 text-slate-950 border-amber-300 font-black' 
-                  : 'bg-emerald-800/80 text-emerald-200 border-emerald-600 hover:bg-emerald-700 hover:text-white'
-              }`}
-              title="Unlock all past games to edit"
-            >
-              <Lock className="w-3 h-3" />
-              <span className="hidden sm:inline">{isUnlockedOverride ? 'Locked' : 'Unlock'}</span>
-            </button>
+            {/* Unlock All Toggle (Admin Only) */}
+            {isAdminUser && (
+              <button
+                type="button"
+                onClick={() => setIsUnlockedOverride(prev => !prev)}
+                className={`px-2 py-1 rounded-lg text-[11px] font-bold transition-colors cursor-pointer border flex items-center gap-1 ${
+                  isUnlockedOverride 
+                    ? 'bg-amber-400 text-slate-950 border-amber-300 font-black' 
+                    : 'bg-emerald-800/80 text-emerald-200 border-emerald-600 hover:bg-emerald-700 hover:text-white'
+                }`}
+                title="Admin Only: Unlock past kickoff games to edit"
+              >
+                <Lock className="w-3 h-3" />
+                <span className="hidden sm:inline">{isUnlockedOverride ? 'Unlocked' : 'Admin Unlock'}</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -910,29 +984,43 @@ export const WeeklyPicksTab: React.FC<WeeklyPicksTabProps> = memo(({
         </div>
       )}
 
-      {/* Unsaved Draft Floating / Top Banner */}
-      {pickedCount > 0 && (
-        <div className="mb-3 bg-amber-50 border-2 border-amber-400 p-2.5 sm:p-3 rounded-xl flex items-center justify-between gap-2 shadow-2xs">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="text-base select-none shrink-0">📝</span>
-            <div className="text-xs text-amber-950 font-bold min-w-0 truncate">
-              <span>{pickedCount} of {games.length} games selected</span>
-              <span className="hidden sm:inline font-normal text-amber-800 ml-1.5">— Tap &quot;Lock In Picks&quot; to officially submit to the Pool!</span>
-            </div>
+      {/* Ambient Live Auto-Save Status Banner */}
+      <div className="mb-3 bg-white border border-emerald-300/80 p-2.5 sm:p-3 rounded-xl flex items-center justify-between gap-2 shadow-2xs">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-black shrink-0 ${
+            saveStatus === 'saving' 
+              ? 'bg-amber-100 text-amber-800 animate-spin' 
+              : saveStatus === 'offline' 
+                ? 'bg-amber-100 text-amber-900' 
+                : 'bg-emerald-100 text-emerald-800'
+          }`}>
+            {saveStatus === 'saving' ? '⏳' : saveStatus === 'offline' ? '⚠️' : '✓'}
+          </span>
+          <div className="text-xs text-slate-800 font-bold min-w-0 truncate">
+            <span className="font-black text-emerald-950">
+              {saveStatus === 'saving' 
+                ? 'Auto-Saving to Cloud...' 
+                : saveStatus === 'offline' 
+                  ? 'Saved Locally (Offline)' 
+                  : 'All Picks Auto-Saved'}
+            </span>
+            <span className="text-slate-600 ml-1.5 font-medium hidden sm:inline">
+              ({pickedCount} of {games.length} games selected • Editable until kickoff)
+            </span>
           </div>
-          <button
-            type="button"
-            onClick={() => handleSubmit()}
-            className="bg-[#1b3a2b] hover:bg-[#142d21] text-amber-300 font-black px-3 py-1.5 rounded-lg text-xs transition-all shrink-0 cursor-pointer shadow-xs border border-amber-400/60 active:scale-95 flex items-center gap-1"
-          >
-            <CheckCircle2 className="w-3.5 h-3.5 text-amber-400" />
-            <span>Lock In Now</span>
-          </button>
         </div>
-      )}
+        <button
+          type="button"
+          onClick={onViewLeaderboard}
+          className="text-xs font-bold text-emerald-800 hover:text-emerald-950 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-1 rounded-lg border border-emerald-200 transition-all shrink-0 cursor-pointer flex items-center gap-1 active:scale-95"
+        >
+          <span>Standings Matrix</span>
+          <ChevronRight className="w-3.5 h-3.5 text-emerald-700" />
+        </button>
+      </div>
 
       {/* 16 Matchup Cards / Rows */}
-      <form onSubmit={handleSubmit} className={viewStyle === 'compact' ? 'space-y-2' : 'space-y-3'}>
+      <div className={viewStyle === 'compact' ? 'space-y-2' : 'space-y-3'}>
         {games.map((game) => (
           <WeeklyPickGameCard
             key={game.gameNumber}
@@ -945,7 +1033,7 @@ export const WeeklyPicksTab: React.FC<WeeklyPicksTabProps> = memo(({
           />
         ))}
 
-        {/* Monday Night Tiebreaker Card */}
+        {/* Monday Night Tiebreaker Card with Live Auto-Save */}
         <div className="bg-white rounded-2xl p-3.5 sm:p-4 border-2 border-purple-400 shadow-sm mt-4">
           <div className="flex items-start justify-between gap-2 mb-1.5">
             <div>
@@ -962,7 +1050,7 @@ export const WeeklyPicksTab: React.FC<WeeklyPicksTabProps> = memo(({
           </div>
 
           <p className="text-xs text-slate-600 mb-3 leading-relaxed font-medium">
-            Closest guess to total combined MNF score wins weekly tiebreakers.
+            Closest guess to total combined MNF score wins weekly tiebreakers. Automatically saved upon entry.
           </p>
 
           <div className="flex flex-col sm:flex-row items-center gap-2.5">
@@ -978,7 +1066,7 @@ export const WeeklyPicksTab: React.FC<WeeklyPicksTabProps> = memo(({
                 step="1"
                 placeholder="e.g. 45"
                 value={tiebreakerInput}
-                onChange={(e) => setTiebreakerInput(e.target.value)}
+                onChange={(e) => handleTiebreakerChange(e.target.value)}
                 className="w-full bg-purple-50/50 border-2 border-purple-400 rounded-xl px-3.5 py-2.5 text-lg font-black text-slate-900 focus:outline-none focus:border-purple-600 focus:bg-white"
                 style={{ touchAction: 'manipulation' }}
               />
@@ -995,49 +1083,62 @@ export const WeeklyPicksTab: React.FC<WeeklyPicksTabProps> = memo(({
           </div>
         </div>
 
-        {/* Primary Bottom Submit Button */}
-        <div className="pt-2 pb-6">
-          <button
-            type="submit"
-            id="lock-in-picks-btn"
-            className={`w-full font-black py-3.5 px-5 rounded-xl text-base shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-[0.98] ${
-              isComplete
-                ? 'bg-gradient-to-r from-emerald-800 to-[#1b3a2b] hover:from-emerald-700 hover:to-emerald-900 text-white border-2 border-emerald-400 ring-2 ring-emerald-300/40'
-                : 'bg-[#1b3a2b] hover:bg-[#142d21] text-white border-2 border-emerald-600'
-            }`}
-          >
-            <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-            <span>
-              {activePlayer 
-                ? `Lock In Official Picks for ${activePlayer.name} (${pickedCount}/${games.length})` 
-                : `Choose Name & Lock In Picks (${pickedCount}/${games.length})`}
-            </span>
-          </button>
-          <p className="text-center text-[11px] text-slate-500 mt-1.5 font-medium">
-            Straight-up pool • Straightforward 1-tap picks • Synced instantly
-          </p>
+        {/* Ambient Auto-Save Reassurance & Direct Matrix Link */}
+        <div className="pt-3 pb-8">
+          <div className="bg-emerald-50/70 border-2 border-emerald-300 rounded-2xl p-4 sm:p-5 text-center shadow-xs">
+            <div className="flex items-center justify-center gap-2 mb-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+              <span className="text-xs sm:text-sm font-black text-emerald-950 uppercase tracking-wider">
+                Instant Auto-Save Active
+              </span>
+            </div>
+            <p className="text-xs sm:text-sm text-emerald-900 font-medium max-w-lg mx-auto leading-relaxed mb-3">
+              Every pick you tap is auto-saved immediately to your device and synchronized with the master pool ledger. 
+              You can adjust any selection anytime before each game kicks off.
+              {poolConfig.enableAutoVegasFavoritesFallback !== false && (
+                <span className="block mt-1 text-[11px] text-emerald-800 font-bold">
+                  ★ Dad&apos;s Rule Active: Unpicked games at kickoff receive Vegas Favorites automatically so no contender takes a zero.
+                </span>
+              )}
+            </p>
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-2">
+              <button
+                type="button"
+                onClick={onViewLeaderboard}
+                className="w-full sm:w-auto bg-[#1b3a2b] hover:bg-[#142d21] text-amber-300 hover:text-amber-200 font-black py-3 px-6 rounded-xl text-sm transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer active:scale-95 border border-emerald-600"
+              >
+                <Trophy className="w-4 h-4 text-amber-300" />
+                <span>View Full Standings & Score Matrix</span>
+              </button>
+            </div>
+          </div>
         </div>
-      </form>
+      </div>
 
-      {/* STICKY FLOATING BOTTOM SUBMIT / PROGRESS BAR ON MOBILE */}
-      <div className="md:hidden fixed bottom-14 left-0 right-0 z-30 p-2 bg-slate-900/90 backdrop-blur-xs border-t border-slate-800 shadow-xl flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5 pl-2">
-          <CheckCircle2 className={`w-4 h-4 ${isComplete ? 'text-emerald-400' : 'text-amber-300'}`} />
-          <span className="text-xs font-black text-white">
-            {pickedCount}/{games.length} Picked
-          </span>
+      {/* MOBILE STICKY BOTTOM AUTO-SAVE STATUS & STANDINGS DOCK */}
+      <div className="md:hidden fixed bottom-14 left-0 right-0 z-30 px-3 py-2 bg-slate-900/95 backdrop-blur-md border-t border-slate-800 shadow-xl flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+            saveStatus === 'saving' ? 'bg-amber-400 animate-ping' : 'bg-emerald-400'
+          }`} />
+          <div className="min-w-0">
+            <div className="text-[11px] font-black text-white truncate flex items-center gap-1">
+              <span>{saveStatus === 'saving' ? 'Auto-Saving...' : '✓ Auto-Saved'}</span>
+              <span className="text-emerald-300 font-bold">({pickedCount}/{games.length})</span>
+            </div>
+            <div className="text-[9px] text-slate-400 truncate">
+              {activePlayer ? activePlayer.name : 'No name selected'}
+            </div>
+          </div>
         </div>
 
         <button
           type="button"
-          onClick={() => handleSubmit()}
-          className={`px-4 py-2 rounded-lg font-black text-xs transition-all flex items-center gap-1.5 cursor-pointer shadow-md ${
-            isComplete
-              ? 'bg-amber-400 hover:bg-amber-300 text-slate-950 animate-pulse'
-              : 'bg-emerald-700 hover:bg-emerald-600 text-white'
-          }`}
+          onClick={onViewLeaderboard}
+          className="bg-amber-400 hover:bg-amber-300 text-slate-950 font-black px-3.5 py-1.5 rounded-lg text-xs transition-all flex items-center gap-1 shadow-sm shrink-0 active:scale-95 cursor-pointer"
         >
-          <span>{isComplete ? 'Lock In Picks ➔' : 'Save Picks'}</span>
+          <span>Standings</span>
+          <ChevronRight className="w-3.5 h-3.5" />
         </button>
       </div>
 

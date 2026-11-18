@@ -57,8 +57,14 @@ export default function App() {
   // Load saved active player from localStorage or default to null
   const [activePlayer, setActivePlayer] = useState<Player | null>(() => {
     try {
-      const saved = localStorage.getItem(ACTIVE_STORAGE_KEYS.ACTIVE_PLAYER_ID);
+      const saved = localStorage.getItem(ACTIVE_STORAGE_KEYS.ACTIVE_PLAYER_ID) || localStorage.getItem('nfl_pool_active_player_id');
       if (saved) {
+        const savedPlayersRaw = localStorage.getItem(ACTIVE_STORAGE_KEYS.PLAYERS);
+        if (savedPlayersRaw) {
+          const parsedPlayers: Player[] = JSON.parse(savedPlayersRaw);
+          const match = parsedPlayers.find(p => p.id === saved || p.name === saved);
+          if (match) return match;
+        }
         const found = INITIAL_PLAYERS.find(p => p.id === saved);
         if (found) return found;
       }
@@ -283,9 +289,10 @@ export default function App() {
       const savedV10 = localStorage.getItem(ACTIVE_STORAGE_KEYS.PLAYERS);
       if (savedV10) {
         const parsed: Player[] = JSON.parse(savedV10);
+        const botName = (getSavedPoolConfig().elvisBotName || 'Elvis').trim() || 'Elvis';
         const filtered = parsed
           .filter(p => !BANNED_PLACEHOLDER_NAMES.has(p.id.toLowerCase()) && !BANNED_PLACEHOLDER_NAMES.has(p.name.toLowerCase()))
-          .map(p => (p.id === 'elvis' ? { ...p, name: 'Elvis' } : p));
+          .map(p => ((p.id === 'elvis' || p.isElvis) ? { ...p, name: (p.name && p.name !== 'Elvis') ? p.name : botName, isElvis: true } : p));
         return filtered;
       }
     } catch (e) {}
@@ -428,16 +435,18 @@ export default function App() {
           setPlayers(cleanPlayers);
           if (cleanPlayers.length > 0) {
             setActivePlayer(prev => {
-              if (prev && cleanPlayers.some(p => p.id === prev.id || p.name === prev.name)) {
-                return cleanPlayers.find(p => p.id === prev.id || p.name === prev.name) || prev;
+              if (prev) {
+                const matchedPrev = cleanPlayers.find(p => p.id === prev.id || p.name.toLowerCase() === prev.name.toLowerCase());
+                if (matchedPrev) return matchedPrev;
               }
-              const adminPlayer = cleanPlayers.find(p => p.role === 'admin') || cleanPlayers.find(p => !p.isElvis) || cleanPlayers[0];
-              if (adminPlayer) {
-                try {
-                  localStorage.setItem(ACTIVE_STORAGE_KEYS.ACTIVE_PLAYER_ID, adminPlayer.id);
-                } catch (e) {}
-              }
-              return adminPlayer || null;
+              try {
+                const savedId = localStorage.getItem(ACTIVE_STORAGE_KEYS.ACTIVE_PLAYER_ID) || localStorage.getItem('nfl_pool_active_player_id');
+                if (savedId) {
+                  const matchedSaved = cleanPlayers.find(p => p.id === savedId || p.name === savedId);
+                  if (matchedSaved) return matchedSaved;
+                }
+              } catch (e) {}
+              return null;
             });
           }
         }
@@ -511,17 +520,19 @@ export default function App() {
       const rosterPicks: Record<string, PlayerPickData> = {};
       
       currentRoster.forEach(p => {
-        const cleanName = p.id === 'elvis' ? 'Elvis' : p.name;
-        if (picksMap[cleanName] && Object.keys(picksMap[cleanName].picks || {}).length > 0) {
-          rosterPicks[cleanName] = picksMap[cleanName];
-        } else if (cleanName === 'Elvis') {
-          // If Firestore returns an empty document for Elvis, protect existing memory/localStorage picks
-          const existingElvis = allPicksRef.current?.['Elvis'];
+        const cleanName = p.name;
+        const isBot = Boolean(p.id === 'elvis' || p.isElvis);
+        const botDoc = picksMap[cleanName] || (isBot ? picksMap['Elvis'] : undefined);
+        if (botDoc && Object.keys(botDoc.picks || {}).length > 0) {
+          rosterPicks[cleanName] = { ...botDoc, contenderName: cleanName };
+        } else if (isBot) {
+          // If Firestore returns an empty document for the Vegas Bot, protect existing memory/localStorage picks
+          const existingElvis = allPicksRef.current?.[cleanName] || allPicksRef.current?.['Elvis'];
           if (existingElvis && Object.keys(existingElvis.picks || {}).length > 0) {
-            rosterPicks['Elvis'] = existingElvis;
+            rosterPicks[cleanName] = { ...existingElvis, contenderName: cleanName };
           } else {
-            rosterPicks['Elvis'] = {
-              contenderName: 'Elvis',
+            rosterPicks[cleanName] = {
+              contenderName: cleanName,
               picks: {},
               tiebreaker: ''
             };
@@ -675,8 +686,10 @@ export default function App() {
     setActivePlayer(player);
     try {
       if (player) {
+        localStorage.setItem(ACTIVE_STORAGE_KEYS.ACTIVE_PLAYER_ID, player.id);
         localStorage.setItem('nfl_pool_active_player_id', player.id);
       } else {
+        localStorage.removeItem(ACTIVE_STORAGE_KEYS.ACTIVE_PLAYER_ID);
         localStorage.removeItem('nfl_pool_active_player_id');
       }
     } catch (e) {}
@@ -701,21 +714,30 @@ export default function App() {
     savePicksGlobally(contenderName, pickedGames, tiebreaker, timestamp, adminOverride);
   }, []);
 
-  // Admin updating player contact info & status
-  const handleUpdatePlayerContact = useCallback((id: string, email: string, phone?: string, location?: string, isActive?: boolean) => {
+  // Admin updating player contact info, status & role
+  const handleUpdatePlayerContact = useCallback((id: string, email: string, phone?: string, location?: string, isActive?: boolean, role?: 'admin' | 'player') => {
     setPlayers(prev => prev.map(p => p.id === id ? { 
       ...p, 
       email, 
       phone, 
       location: location !== undefined ? location : p.location,
-      isActive: isActive !== undefined ? isActive : p.isActive
+      isActive: isActive !== undefined ? isActive : p.isActive,
+      role: role !== undefined ? role : p.role,
+      tagline: role !== undefined ? (role === 'admin' ? 'Pool Admin & Contender' : (p.tagline === 'Pool Admin & Contender' || p.tagline === 'admin' ? 'Contender' : p.tagline)) : p.tagline
     } : p));
     // Save to global server storage
-    updatePlayerGlobally({ id, email, phone, location, isActive });
+    updatePlayerGlobally({
+      id,
+      email,
+      phone,
+      location,
+      isActive,
+      ...(role !== undefined ? { role, tagline: role === 'admin' ? 'Pool Admin & Contender' : 'Contender' } : {})
+    });
   }, []);
 
   // Admin adding a new contender at any point in the season without wiping existing picks
-  const handleAddContender = useCallback(async (name: string, email: string, phone?: string): Promise<{ success: boolean; error?: string }> => {
+  const handleAddContender = useCallback(async (name: string, email: string, phone?: string, role: 'admin' | 'player' = 'player'): Promise<{ success: boolean; error?: string }> => {
     const cleanName = name.trim();
     if (!cleanName) {
       return { success: false, error: 'Contender name is required.' };
@@ -725,8 +747,8 @@ export default function App() {
       name: cleanName,
       email: email.trim(),
       phone: phone?.trim() || '',
-      role: 'player',
-      tagline: 'Contender',
+      role,
+      tagline: role === 'admin' ? 'Pool Admin & Contender' : 'Contender',
       isActive: true,
       paid: true
     };

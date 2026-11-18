@@ -53,7 +53,7 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = memo(({
   );
   const [adminName, setAdminName] = useState(() => {
     const raw = initialConfig.adminName;
-    if (!raw || raw === 'Crew Chief') return DEFAULT_POOL_CONFIG.adminName;
+    if (!raw || raw === 'Crew Chief' || raw === 'Pool Admin') return initialConfig.crewChiefName && initialConfig.crewChiefName !== 'Umpire-in-Chief' ? initialConfig.crewChiefName : '';
     return raw;
   });
   const [adminEmail, setAdminEmail] = useState(() => {
@@ -63,7 +63,7 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = memo(({
   });
   const [crewChiefName, setCrewChiefName] = useState(() => {
     const raw = initialConfig.crewChiefName;
-    if (!raw) return DEFAULT_POOL_CONFIG.crewChiefName;
+    if (!raw) return initialConfig.adminName || DEFAULT_POOL_CONFIG.crewChiefName;
     return raw;
   });
   const [adminPin, setAdminPin] = useState(initialConfig.adminPin || '2233');
@@ -75,6 +75,12 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = memo(({
   const [elvisBotName, setElvisBotName] = useState(initialConfig.elvisBotName || 'Elvis');
   const [enableFineJar, setEnableFineJar] = useState(initialConfig.enableFineJar !== false);
   const [fineJarTitle, setFineJarTitle] = useState(initialConfig.fineJarTitle || '$1 Umpire Fine Jar');
+  const [enableAutoVegasFavoritesFallback, setEnableAutoVegasFavoritesFallback] = useState(
+    initialConfig.enableAutoVegasFavoritesFallback !== false
+  );
+  const [autoVegasCrownProtection, setAutoVegasCrownProtection] = useState(
+    initialConfig.autoVegasCrownProtection !== false
+  );
 
   // Step 4: Additional Contenders (Main Pool Admin is ALWAYS automatically Contender #1 on the roster)
   const [otherContenders, setOtherContenders] = useState<Player[]>(() => {
@@ -242,6 +248,8 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = memo(({
         elvisBotName: elvisBotName.trim() || 'Elvis',
         enableFineJar,
         fineJarTitle: fineJarTitle.trim() || '$1 Umpire Equipment Jar',
+        enableAutoVegasFavoritesFallback,
+        autoVegasCrownProtection,
         startingWeek: confirmedWeek,
         updatedAt: new Date().toISOString()
       };
@@ -446,17 +454,23 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = memo(({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Your Name (Main Pool Admin &amp; #1 Contender on Roster)
+                    Your Name (Pool Admin &amp; Contender on Roster) *
                   </label>
                   <input
                     type="text"
                     value={adminName}
-                    onChange={e => setAdminName(e.target.value)}
-                    placeholder="e.g. Coach Mike"
+                    onChange={e => {
+                      const val = e.target.value;
+                      if (!crewChiefName || crewChiefName === adminName || crewChiefName === 'Umpire-in-Chief') {
+                        setCrewChiefName(val);
+                      }
+                      setAdminName(val);
+                    }}
+                    placeholder="e.g. Joseph (Your name)"
                     className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm font-semibold focus:outline-none focus:border-emerald-700"
                   />
                   <span className="text-[10px] text-emerald-700 font-semibold mt-0.5 block">
-                    ✓ Automatically added to the active contender roster
+                    ✓ Automatically placed as Contender #1 on the roster with full Admin privileges
                   </span>
                 </div>
 
@@ -481,9 +495,12 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = memo(({
                     type="text"
                     value={crewChiefName}
                     onChange={e => setCrewChiefName(e.target.value)}
-                    placeholder="e.g. Umpire-in-Chief"
+                    placeholder="e.g. Joseph or Umpire-in-Chief"
                     className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm font-semibold focus:outline-none focus:border-emerald-700"
                   />
+                  <span className="text-[10px] text-slate-500 font-medium mt-0.5 block">
+                    Defaults to your name (author of dispatches &amp; rules consultant)
+                  </span>
                 </div>
 
                 <div>
@@ -652,6 +669,50 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = memo(({
                         onChange={e => setFineJarTitle(e.target.value)}
                         placeholder="$1 Umpire Equipment Jar"
                         className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-bold"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* Missed Kickoff Protection ("Dad's Rule") */}
+                <div className="col-span-1 sm:col-span-2 p-4 rounded-xl border border-emerald-300 bg-emerald-50/60 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-lg">🛡️</span>
+                      <div>
+                        <span className="font-black text-xs sm:text-sm text-emerald-950 block">
+                          Missed Kickoff Protection (&quot;Dad&apos;s Rule&quot;)
+                        </span>
+                        <span className="text-[10px] text-emerald-800 font-bold">
+                          Auto-assigns Vegas Favorites for unpicked games at kickoff whistle
+                        </span>
+                      </div>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={enableAutoVegasFavoritesFallback}
+                      onChange={e => setEnableAutoVegasFavoritesFallback(e.target.checked)}
+                      className="w-4 h-4 accent-emerald-700 cursor-pointer"
+                    />
+                  </div>
+                  <p className="text-xs text-slate-700 leading-relaxed font-medium">
+                    When enabled, contenders who get tied up at work or forget to submit picks receive the Vegas Opening Favorite at each game&apos;s scheduled kickoff. Keeps contenders in the pool all season long with zero admin liability or suspicion of favoritism.
+                  </p>
+                  {enableAutoVegasFavoritesFallback && (
+                    <div className="pt-2 border-t border-emerald-200/80 flex items-center justify-between gap-3">
+                      <div>
+                        <span className="font-bold text-xs text-slate-900 block">
+                          Weekly Crown Protection
+                        </span>
+                        <span className="text-[11px] text-slate-600 block">
+                          Contenders who manually picked always win 1st place ties over slates that relied on auto-defaults.
+                        </span>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={autoVegasCrownProtection}
+                        onChange={e => setAutoVegasCrownProtection(e.target.checked)}
+                        className="w-4 h-4 accent-emerald-700 cursor-pointer"
                       />
                     </div>
                   )}

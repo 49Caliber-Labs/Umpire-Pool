@@ -350,11 +350,13 @@ export async function buildVibrantWeeklyDispatch(
     ? (isCurrentWeekComplete && games[0]?.week === weekNumber ? weekNumber : latestCompiledWeek)
     : (isTuesdayHistorical ? latestCompiledWeek : weekNumber);
 
+  const botName = (cfg.elvisBotName || 'Elvis').trim() || 'Elvis';
+
   // Calculate live/compiled wins for each player
   const playerScores = activePlayers.map(p => {
-    const cleanName = p.id === 'elvis' ? 'Elvis' : p.name;
-    const pPicks = picks[cleanName]?.picks || picks[p.name]?.picks || {};
-    const rawTb = picks[cleanName]?.tiebreaker ?? picks[p.name]?.tiebreaker ?? '';
+    const cleanName = (p.id === 'elvis' || p.isElvis) ? (p.name && p.name !== 'Elvis' ? p.name : botName) : p.name;
+    const pPicks = picks[cleanName]?.picks || picks[p.name]?.picks || ((p.id === 'elvis' || p.isElvis) ? picks['Elvis']?.picks : undefined) || {};
+    const rawTb = picks[cleanName]?.tiebreaker ?? picks[p.name]?.tiebreaker ?? ((p.id === 'elvis' || p.isElvis) ? picks['Elvis']?.tiebreaker : undefined) ?? '';
 
     let liveWins = 0;
     let liveLosses = 0;
@@ -493,9 +495,9 @@ export async function buildVibrantWeeklyDispatch(
     tiebreakerDetail = `Contender <strong>${weeklyWinner.name}</strong> clinched the Week ${dispatchWeek} Crown outright with a slate-leading <strong>${weeklyWinner.wins} victories</strong> (${weeklyWinner.wins}-${weeklyWinner.losses})!`;
   }
 
-  // Contender spotlight cards: Elvis remains unrecognized unless Elvis won the week
-  const isElvisWinner = (weeklyWinner.name === 'Elvis');
-  const eligibleSpotlight = ranked.filter(r => isElvisWinner || r.name !== 'Elvis');
+  // Contender spotlight cards: Vegas Bot remains unrecognized unless the Bot won the week
+  const isElvisWinner = Boolean((weeklyWinner as any).player?.isElvis || (weeklyWinner as any).player?.id === 'elvis' || weeklyWinner.name === botName || weeklyWinner.name === 'Elvis');
+  const eligibleSpotlight = ranked.filter(r => isElvisWinner || !(r.player?.isElvis || r.player?.id === 'elvis' || r.name === botName || r.name === 'Elvis'));
   const leader = isElvisWinner ? weeklyWinner : (eligibleSpotlight[0] || weeklyWinner);
   const chaser = eligibleSpotlight.find(r => r.name !== weeklyWinner.name) || eligibleSpotlight[1] || leader;
   const packContender = eligibleSpotlight.find(r => r.name !== weeklyWinner.name && r.name !== chaser.name) || eligibleSpotlight[2] || chaser;
@@ -582,8 +584,8 @@ export async function buildVibrantWeeklyDispatch(
     tnfScoreSummary = `${tnfWinner} ${Math.max(homeScore, awayScore)}, ${tnfLoser} ${Math.min(homeScore, awayScore)}`;
 
     activePlayers.forEach(p => {
-      const name = p.id === 'elvis' ? 'Elvis' : p.name;
-      const pick = picks[name]?.picks?.[tnfGame.gameNumber];
+      const name = (p.id === 'elvis' || p.isElvis) ? (p.name && p.name !== 'Elvis' ? p.name : botName) : p.name;
+      const pick = picks[name]?.picks?.[tnfGame.gameNumber] || ((p.id === 'elvis' || p.isElvis) ? picks['Elvis']?.picks?.[tnfGame.gameNumber] : undefined);
       if (pick && tnfWinner && pick.toLowerCase().trim() === tnfWinner.toLowerCase().trim()) {
         winnersPicked.push(name);
       } else if (pick) {
@@ -637,7 +639,7 @@ export async function buildVibrantWeeklyDispatch(
     marqueeFacts = `- MARQUEE SPOTLIGHT MATCHUP: ${marqueeGame.awayTeam} at ${marqueeGame.homeTeam} (${marqueeGame.day || 'Sunday'} ${marqueeGame.kickoffTime || '5:15 PM'} PT, Line: ${marqueeGame.spread || 'EVEN'}).`;
   }
 
-  const activeNames = activePlayers.map(p => p.id === 'elvis' ? 'Elvis' : p.name);
+  const activeNames = activePlayers.map(p => (p.id === 'elvis' || p.isElvis) ? (p.name && p.name !== 'Elvis' ? p.name : botName) : p.name);
   const tnfFactStr = tnfGame ? (
     tnfGame.status === 'final' && tnfWinner ? (
       isAllTnfLosers ? (
@@ -880,8 +882,8 @@ export async function buildVibrantWeeklyDispatch(
 
   if (type === 'tuesday' || type === 'friday') {
     podiumSource = activePlayers.map(p => {
-      const cleanName = p.id === 'elvis' ? 'Elvis' : p.name;
-      const histRecord = seasonHistory?.records?.[cleanName];
+      const cleanName = (p.id === 'elvis' || p.isElvis) ? (p.name && p.name !== 'Elvis' ? p.name : botName) : p.name;
+      const histRecord = seasonHistory?.records?.[cleanName] || ((p.id === 'elvis' || p.isElvis) ? seasonHistory?.records?.['Elvis'] : undefined);
       const wkRecord = histRecord?.weeklyBreakdown?.[tuesdayPodiumWeek];
       const wins = wkRecord?.wins ?? (type === 'tuesday' ? (weeklyRanked.find(r => r.name === cleanName)?.wins ?? 0) : 0);
       const losses = wkRecord?.losses ?? (16 - wins);
@@ -1071,7 +1073,7 @@ export async function buildVibrantWeeklyDispatch(
     <span style='color:#a7f3d0; font-size:11px; font-style:italic;'>Opening Lines & Slate Schedule</span>
   </div>
   <div style='padding:12px 14px; font-size:12px; color:#064e3b; line-height:1.6;'>
-    • <strong>Fresh Slate:</strong> The ledger resets, and 16 brand new NFL matchups open up in Week ${nextWeekNumber}.<br/>
+    • <strong>Fresh Slate:</strong> The ledger resets, and brand new NFL matchups open up in Week ${nextWeekNumber}.<br/>
     • <strong>Sheet Distribution:</strong> Blank Week ${nextWeekNumber} pick sheets hit the wire on Wednesday morning.
   </div>
 </div>`;
@@ -1086,8 +1088,8 @@ export async function buildVibrantWeeklyDispatch(
     const awayPickers: string[] = [];
     const homePickers: string[] = [];
     activePlayers.forEach(p => {
-      const cleanName = p.id === 'elvis' ? 'Elvis' : p.name;
-      const pPicks = picks[cleanName]?.picks || {};
+      const cleanName = (p.id === 'elvis' || p.isElvis) ? (p.name && p.name !== 'Elvis' ? p.name : botName) : p.name;
+      const pPicks = picks[cleanName]?.picks || ((p.id === 'elvis' || p.isElvis) ? picks['Elvis']?.picks : undefined) || {};
       const pick = pPicks[mnfGame?.gameNumber || 16];
       if (pick) {
         if (pick === mnfGame?.awayTeam) awayPickers.push(cleanName);
